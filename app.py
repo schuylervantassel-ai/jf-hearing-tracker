@@ -359,7 +359,8 @@ def _fr_filter_documents(documents, q, wf, cf):
             and d["comments_close_on"] < today.isoformat()
         ]
     filtered.sort(
-        key=lambda x: (x.get("comments_close_on") or "9999-99-99", x.get("publication_date") or ""),
+        key=lambda x: (x.get("publication_date") or "", x.get("document_number") or ""),
+        reverse=True,
     )
     return filtered
 
