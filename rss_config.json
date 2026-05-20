@@ -1,0 +1,113 @@
+[
+  {
+    "name": "Senate Armed Services (SASC)",
+    "url": "https://www.armed-services.senate.gov/rss/hearings.xml",
+    "committee": "Senate Armed Services (SASC)",
+    "active": true,
+    "last_status": "Error: Not Found"
+  },
+  {
+    "name": "Senate Foreign Relations (SFRC)",
+    "url": "https://rss.app/feeds/52g7oTFDxPrMSp15.xml",
+    "committee": "Senate Foreign Relations (SFRC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "Senate Intelligence (SSCI)",
+    "url": "https://www.intelligence.senate.gov/feed/",
+    "committee": "Senate Intelligence (SSCI)",
+    "active": true,
+    "last_fetched": "2026-05-20 15:08",
+    "last_status": "OK"
+  },
+  {
+    "name": "Senate Homeland Security (SHSGAC)",
+    "url": "https://www.hsgac.senate.gov/feed/",
+    "committee": "Senate Homeland Security (SHSGAC)",
+    "active": true,
+    "last_fetched": "2026-05-20 15:08",
+    "last_status": "OK"
+  },
+  {
+    "name": "House Foreign Affairs (HFAC)",
+    "url": "https://rss.app/feeds/iqYqfkbDWR3Q2Y4i.xml",
+    "committee": "House Foreign Affairs (HFAC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "House Intelligence (HPSCI)",
+    "url": "https://intelligence.house.gov/feed/",
+    "committee": "House Intelligence (HPSCI)",
+    "active": true,
+    "last_fetched": "2026-05-20 15:08",
+    "last_status": "OK"
+  },
+  {
+    "name": "House Homeland Security (HHSC)",
+    "url": "https://homeland.house.gov/feed/",
+    "committee": "House Homeland Security (HHSC)",
+    "active": true,
+    "last_fetched": "2026-05-20 15:08",
+    "last_status": "OK"
+  },
+  {
+    "name": "Senate Foreign Relations",
+    "url": "https://rss.app/feeds/kqsbwJt5wQLpYBLS.xml",
+    "committee": "Senate Foreign Relations (SFRC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "U.S.-China Economic and Security Review Commission",
+    "url": "https://rss.app/feeds/Wnd7styu9c5wheMe.xml",
+    "committee": "U.S.-China Economic and Security Review Commission",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "The House Select Committee on China",
+    "url": "https://rss.app/feeds/nkXcMfSYxoxOho9s.xml",
+    "committee": "The House Select Committee on China",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "House Armed Services (HASC)",
+    "url": "https://rss.app/feeds/7dnVWZHk9XFZt0rF.xml",
+    "committee": "Senate Armed Services (SASC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "The Committee on Homeland Security",
+    "url": "https://rss.app/feeds/1vOAMyGiCThinS3I.xml",
+    "committee": "House Homeland Security (HHSC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "Commission On Security And Cooperation In Europe",
+    "url": "https://rss.app/feeds/44fJjore34NnobkM.xml",
+    "committee": "Commission On Security And Cooperation In Europe (Helsinki)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  },
+  {
+    "name": "Hearings | Republican Foreign Affairs Committee",
+    "url": "https://rss.app/feeds/e4ENltqc5zrThyLM.xml",
+    "committee": "House Foreign Affairs (HFAC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:51",
+    "last_status": "Error: Payment Required"
+  }
+]

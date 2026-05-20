@@ -1,0 +1,67 @@
+[
+  {
+    "name": "HFAC Majority on X",
+    "url": "https://rss.app/feeds/wJ2Wr7h4hpDCsOgi.xml",
+    "committee": "House Foreign Affairs (HFAC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:52",
+    "last_status": "Error: HTTP Error 402: Payment Required"
+  },
+  {
+    "name": "SASC on X",
+    "handle": "@ArmedServices",
+    "committee": "Senate Armed Services (SASC)",
+    "url": "",
+    "active": true
+  },
+  {
+    "name": "SFRC on X",
+    "handle": "@SenateForeign",
+    "committee": "Senate Foreign Relations (SFRC)",
+    "url": "",
+    "active": true
+  },
+  {
+    "name": "SSCI on X",
+    "handle": "@SenIntelComm",
+    "committee": "Senate Intelligence (SSCI)",
+    "url": "",
+    "active": true
+  },
+  {
+    "name": "SHSGAC on X",
+    "handle": "@SenHomeland",
+    "committee": "Senate Homeland Security (SHSGAC)",
+    "url": "",
+    "active": true
+  },
+  {
+    "name": "HASC on X",
+    "handle": "@HASCRepublicans",
+    "committee": "House Armed Services (HASC)",
+    "url": "",
+    "active": true
+  },
+  {
+    "name": "HPSCI on X",
+    "handle": "@HouseIntelGOP",
+    "committee": "House Intelligence (HPSCI)",
+    "url": "",
+    "active": true
+  },
+  {
+    "name": "HHSC on X",
+    "handle": "@HomelandGOP",
+    "committee": "House Homeland Security (HHSC)",
+    "url": "",
+    "active": true
+  },
+  {
+    "name": "HFA",
+    "url": "https://rss.app/feeds/wJ2Wr7h4hpDCsOgi.xml",
+    "committee": "House Foreign Affairs (HFAC)",
+    "active": true,
+    "last_fetched": "2026-04-14 10:52",
+    "last_status": "Error: HTTP Error 402: Payment Required"
+  }
+]

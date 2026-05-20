@@ -1,0 +1,4 @@
+flask
+feedparser
+gunicorn
+openpyxl

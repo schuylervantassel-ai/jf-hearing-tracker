@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Committee Activity{% endblock %}
+{% block page_title %}Committee Activity{% endblock %}
+
+{% block header_actions %}
+  <div class="flex items-center gap-2">
+    <a href="{{ url_for('activity_feeds') }}"
+       class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
+      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+      Manage Feeds
+    </a>
+    <form method="post" action="{{ url_for('pull_activity') }}">
+      <button type="submit"
+              class="inline-flex items-center gap-1.5 px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Refresh
+      </button>
+    </form>
+  </div>
+{% endblock %}
+
+{% block content %}
+
+<!-- Filters -->
+<div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-5">
+  <form method="get" class="flex flex-wrap gap-3 items-end">
+    <div class="flex-1 min-w-[180px]">
+      <label class="block text-xs font-semibold text-slate-500 mb-1">Search</label>
+      <input type="text" name="q" value="{{ q }}" placeholder="Keywords…"
+             class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-300"/>
+    </div>
+    <div class="w-52">
+      <label class="block text-xs font-semibold text-slate-500 mb-1">Committee</label>
+      <select name="committee"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white">
+        <option value="">All committees</option>
+        {% for c in committees %}
+          <option value="{{ c }}" {% if cf == c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit"
+            class="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white text-sm font-medium rounded-lg transition-colors">
+      Filter
+    </button>
+    {% if q or cf %}
+    <a href="{{ url_for('activity') }}"
+       class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors">
+      Clear
+    </a>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Feed sources bar -->
+{% if feeds %}
+<div class="flex flex-wrap gap-2 mb-5">
+  {% for feed in feeds %}
+    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium
+                 {% if feed.get('active', True) %}bg-sky-50 text-sky-700 border border-sky-200
+                 {% else %}bg-slate-100 text-slate-400 border border-slate-200{% endif %}">
+      <span class="w-1.5 h-1.5 rounded-full {% if feed.get('active', True) %}bg-sky-400{% else %}bg-slate-300{% endif %}"></span>
+      {{ feed.name }}
+      {% if feed.get('last_fetched') %}
+        <span class="text-sky-400 font-normal">· {{ feed.last_fetched[:10] }}</span>
+      {% endif %}
+    </span>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Timeline -->
+{% if items %}
+<div class="space-y-3">
+  {% set ns = namespace(prev_date='') %}
+  {% for item in items %}
+    {% set d = item.date[:10] if item.date else '' %}
+
+    {% if d != ns.prev_date %}
+      {% set ns.prev_date = d %}
+      <div class="flex items-center gap-3 py-1">
+        <span class="text-xs font-semibold text-slate-400 whitespace-nowrap">{{ d }}</span>
+        <div class="flex-1 h-px bg-slate-100"></div>
+      </div>
+    {% endif %}
+
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 hover:border-sky-200 transition-colors">
+      <div class="flex items-start gap-3">
+
+        <!-- X / Twitter icon -->
+        <div class="w-8 h-8 rounded-full bg-black flex items-center justify-center flex-shrink-0 mt-0.5">
+          <svg class="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+          </svg>
+        </div>
+
+        <div class="flex-1 min-w-0">
+          <!-- Header: feed name + committee + time -->
+          <div class="flex items-center flex-wrap gap-2 mb-2">
+            <span class="text-sm font-semibold text-slate-800">{{ item.feed_name }}</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-100 font-medium">
+              {{ item.committee.split('(')[0].strip() if '(' in item.committee else item.committee }}
+            </span>
+            {% if item.author %}
+              <span class="text-xs text-slate-400">{{ item.author }}</span>
+            {% endif %}
+            <span class="text-xs text-slate-400 ml-auto">{{ item.date[5:] if item.date|length > 5 else item.date }}</span>
+          </div>
+
+          <!-- Tweet text -->
+          <p class="text-sm text-slate-700 leading-relaxed">{{ item.title }}</p>
+
+          {% if item.summary and item.summary != item.title and item.summary|length > 10 %}
+            <p class="text-xs text-slate-500 mt-1.5 leading-relaxed line-clamp-3">{{ item.summary }}</p>
+          {% endif %}
+
+          <!-- Link -->
+          {% if item.url %}
+            <a href="{{ item.url }}" target="_blank" rel="noopener"
+               class="inline-flex items-center gap-1 mt-2 text-xs text-sky-600 hover:text-sky-800 font-medium">
+              View on X
+              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+              </svg>
+            </a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+<p class="text-center text-xs text-slate-400 mt-6">
+  Showing {{ items|length }} post(s) · last {{ 90 }} days
+</p>
+
+{% else %}
+<div class="bg-white rounded-xl border border-slate-200 shadow-sm p-16 text-center">
+  <div class="w-12 h-12 bg-sky-50 rounded-full flex items-center justify-center mx-auto mb-4">
+    <svg class="w-6 h-6 text-sky-400" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+    </svg>
+  </div>
+  <p class="text-slate-500 text-sm font-medium">No posts yet</p>
+  <p class="text-slate-400 text-xs mt-1">Click <strong>Refresh</strong> to pull from configured X feeds.</p>
+</div>
+{% endif %}
+
+{% endblock %}

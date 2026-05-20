@@ -1,0 +1,29 @@
+# Render Blueprint — deploy from repo root (hearing-tracker folder as Git root).
+# Dashboard: New → Blueprint → connect repo, or apply this file on an existing service.
+#
+# Persistent disk requires a paid plan (Starter ~$7/mo). See RENDER.md for a free-tier demo.
+
+services:
+  - type: web
+    name: hearing-tracker
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    healthCheckPath: /
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: RSS_AUTO_PULL
+        value: "1"
+      - key: RSS_PULL_INTERVAL_MINUTES
+        value: "60"
+    disk:
+      name: hearing-tracker-data
+      mountPath: /var/data
+      sizeGB: 1

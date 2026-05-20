@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode == 'edit' else 'Add' }} Hearing{% endblock %}
+{% block page_title %}{{ 'Edit Hearing #%03d' % h.id if mode == 'edit' else 'Add Hearing' }}{% endblock %}
+
+{% block header_actions %}
+  {% if mode == 'edit' %}
+    <a href="{{ url_for('hearing_detail', hid=h.id) }}"
+       class="px-3 py-2 text-sm text-slate-600 hover:text-slate-800 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+      Cancel
+    </a>
+  {% else %}
+    <a href="{{ url_for('hearings_list') }}"
+       class="px-3 py-2 text-sm text-slate-600 hover:text-slate-800 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+      Cancel
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+
+<form method="post"
+      action="{{ url_for('edit_hearing', hid=h.id) if mode == 'edit' else url_for('add_hearing') }}">
+
+  <!-- Core fields -->
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-5">
+    <h2 class="text-sm font-bold text-slate-600 uppercase tracking-wide mb-5">Core Details</h2>
+
+    <div class="grid grid-cols-2 gap-5 mb-5">
+      <!-- Date -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">Date <span class="text-red-400">*</span></label>
+        <input type="date" name="date" required
+               value="{{ h.get('date') or default_date or '' }}"
+               class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+      </div>
+      <!-- Status -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">Status <span class="text-red-400">*</span></label>
+        <select name="status" required
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+          {% for s in statuses %}
+            <option value="{{ s }}" {% if h.get('status', 'Upcoming') == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <!-- Topic -->
+    <div class="mb-5">
+      <label class="block text-xs font-semibold text-slate-600 mb-1.5">Hearing Topic <span class="text-red-400">*</span></label>
+      <input type="text" name="topic" required
+             value="{{ h.get('topic', '') }}"
+             placeholder="e.g. To receive testimony on U.S. policy toward…"
+             class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+    </div>
+
+    <div class="grid grid-cols-2 gap-5">
+      <!-- Committee -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">Committee <span class="text-red-400">*</span></label>
+        <select name="committee" required
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+          {% for c in committees %}
+            <option value="{{ c }}" {% if h.get('committee') == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <!-- Witnesses -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">Witnesses</label>
+        <input type="text" name="witnesses"
+               value="{{ h.get('witnesses', '') }}"
+               placeholder="Names, titles…"
+               class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+      </div>
+    </div>
+  </div>
+
+  <!-- Jamestown analysis -->
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-5">
+    <h2 class="text-sm font-bold text-slate-600 uppercase tracking-wide mb-5">Jamestown Analysis</h2>
+
+    <div class="grid grid-cols-2 gap-5 mb-5">
+      <!-- Angle -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">Geographic / Thematic Angle <span class="text-red-400">*</span></label>
+        <select name="angle" required
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+          {% for a in angles %}
+            <option value="{{ a }}" {% if h.get('angle') == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <!-- Action -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">Recommended Action <span class="text-red-400">*</span></label>
+        <select name="action" required
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+          {% for ac in actions %}
+            <option value="{{ ac }}" {% if h.get('action') == ac %}selected{% endif %}>{{ ac }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <!-- Questions -->
+    <div class="mb-5">
+      <label class="block text-xs font-semibold text-slate-600 mb-1.5">Questions to Ask</label>
+      <p class="text-xs text-slate-400 mb-2">One question per line.</p>
+      <textarea name="questions" rows="5"
+                placeholder="What is the administration's current posture on…&#10;Has the committee received briefings on…"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 resize-y font-mono">{{ h.get('questions', '') }}</textarea>
+    </div>
+
+    <!-- Notes -->
+    <div>
+      <label class="block text-xs font-semibold text-slate-600 mb-1.5">Notes</label>
+      <textarea name="notes" rows="3"
+                placeholder="Background context, summary, follow-up items…"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 resize-y">{{ h.get('notes', '') }}</textarea>
+    </div>
+  </div>
+
+  <!-- Link -->
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+    <label class="block text-xs font-semibold text-slate-600 mb-1.5">Hearing URL</label>
+    <input type="url" name="url"
+           value="{{ h.get('url', '') }}"
+           placeholder="https://…"
+           class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+  </div>
+
+  <!-- Submit -->
+  <div class="flex items-center gap-3">
+    <button type="submit"
+            class="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors shadow-sm">
+      {{ 'Save Changes' if mode == 'edit' else 'Add Hearing' }}
+    </button>
+    {% if mode == 'edit' %}
+      <a href="{{ url_for('hearing_detail', hid=h.id) }}"
+         class="px-4 py-2.5 text-sm text-slate-600 hover:text-slate-800 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+        Cancel
+      </a>
+    {% endif %}
+  </div>
+
+</form>
+
+{% endblock %}
