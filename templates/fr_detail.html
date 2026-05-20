@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ d.title[:50] }}{% endblock %}
+{% block page_title %}Federal Register Document{% endblock %}
+
+{% block header_actions %}
+  <a href="{{ url_for('federal_register_list') }}"
+     class="px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">← Back</a>
+  {% if d.html_url %}
+  <a href="{{ d.html_url }}" target="_blank" rel="noopener"
+     class="px-4 py-2 text-sm font-medium text-violet-700 border border-violet-200 rounded-lg hover:bg-violet-50">
+    Federal Register ↗
+  </a>
+  {% endif %}
+  {% if d.regulations_url %}
+  <a href="{{ d.regulations_url }}" target="_blank" rel="noopener"
+     class="px-4 py-2 text-sm font-medium text-white bg-violet-600 hover:bg-violet-700 rounded-lg">
+    Regulations.gov ↗
+  </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-2 space-y-5">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+      <p class="text-xs font-mono text-slate-400 mb-2">{{ d.document_number }} · {{ d.type }}</p>
+      <h2 class="text-lg font-bold text-slate-900 leading-snug mb-3">{{ d.title }}</h2>
+      <div class="flex flex-wrap gap-2 mb-4">
+        <span class="text-xs px-2.5 py-1 rounded-full font-medium {{ fr_workflow_cls(d.workflow_status) }}">
+          {{ d.workflow_status }}
+        </span>
+        <span class="text-xs px-2.5 py-1 rounded-full font-medium {{ angle_cls(d.angle) }}">{{ d.angle }}</span>
+        {% if d.comments_close_on %}
+        <span class="text-xs px-2.5 py-1 rounded-full font-medium {{ fr_period_cls(d.comments_close_on) }}">
+          {{ fr_period_label(d.comments_close_on) }} · {{ d.comments_close_on }}
+        </span>
+        {% endif %}
+      </div>
+      {% if d.abstract %}
+      <div class="text-sm text-slate-600 leading-relaxed border-t border-slate-100 pt-4">
+        {{ d.abstract }}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Draft comment</h3>
+      <form method="post" action="{{ url_for('fr_save', did=d.id) }}">
+        <textarea name="draft_comment" rows="12"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg font-mono leading-relaxed"
+                  placeholder="Draft organizational comment text here…">{{ d.draft_comment or '' }}</textarea>
+        <div class="mt-3 flex gap-2">
+          <button type="submit" class="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg">
+            Save draft
+          </button>
+        </div>
+      </form>
+      <p class="text-xs text-slate-400 mt-3">
+        File the official comment on Regulations.gov (link above). Paste the tracking number in Notes after submission.
+      </p>
+    </div>
+  </div>
+
+  <div class="space-y-5">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Details</h3>
+      <dl class="space-y-2 text-sm">
+        <div><dt class="text-xs text-slate-400">Published</dt><dd class="text-slate-800">{{ d.publication_date or '—' }}</dd></div>
+        <div><dt class="text-xs text-slate-400">Agencies</dt><dd class="text-slate-800">{{ (d.agencies or [])|join(', ') or '—' }}</dd></div>
+        <div><dt class="text-xs text-slate-400">Watchlist</dt><dd class="text-slate-800">{{ d.watch_name or '—' }}</dd></div>
+        {% if d.docket_ids %}
+        <div><dt class="text-xs text-slate-400">Docket(s)</dt><dd class="text-slate-800 font-mono text-xs">{{ d.docket_ids|join(', ') }}</dd></div>
+        {% endif %}
+      </dl>
+    </div>
+
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Workflow</h3>
+      <form method="post" action="{{ url_for('fr_save', did=d.id) }}" class="space-y-3">
+        <select name="workflow_status" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+          {% for s in workflow_statuses %}
+          <option value="{{ s }}" {% if d.workflow_status == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <label class="block text-xs font-medium text-slate-500">Internal notes</label>
+        <textarea name="notes" rows="4"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                  placeholder="Tracking #, assignee, mail instructions…">{{ d.notes or '' }}</textarea>
+        <button type="submit" class="w-full px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium rounded-lg">
+          Update
+        </button>
+      </form>
+    </div>
+
+    <form method="post" action="{{ url_for('fr_delete', did=d.id) }}"
+          onsubmit="return confirm('Remove this document from the tracker?')">
+      <button type="submit" class="w-full px-4 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50">
+        Remove from tracker
+      </button>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

@@ -3,5 +3,6 @@ __pycache__/
 .venv/
 .env
 congress_api.json
+federal_register_api.json
 build/
 dist/

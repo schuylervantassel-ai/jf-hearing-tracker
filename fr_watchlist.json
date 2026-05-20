@@ -1,0 +1,68 @@
+[
+  {
+    "name": "Sanctions / OFAC",
+    "search_term": "sanctions",
+    "document_types": [
+      "PRORULE",
+      "NOTICE"
+    ],
+    "active": true,
+    "last_fetched": "2026-05-20 16:09",
+    "last_status": "OK"
+  },
+  {
+    "name": "Export controls",
+    "search_term": "export control",
+    "document_types": [
+      "PRORULE",
+      "NOTICE"
+    ],
+    "active": true,
+    "last_fetched": "2026-05-20 16:09",
+    "last_status": "OK"
+  },
+  {
+    "name": "China / Indo-Pacific",
+    "search_term": "China",
+    "document_types": [
+      "PRORULE",
+      "NOTICE"
+    ],
+    "active": true,
+    "last_fetched": "2026-05-20 16:09",
+    "last_status": "OK"
+  },
+  {
+    "name": "Russia / Eurasia",
+    "search_term": "Russia",
+    "document_types": [
+      "PRORULE",
+      "NOTICE"
+    ],
+    "active": true,
+    "last_fetched": "2026-05-20 16:09",
+    "last_status": "OK"
+  },
+  {
+    "name": "Human rights",
+    "search_term": "human rights",
+    "document_types": [
+      "PRORULE",
+      "NOTICE"
+    ],
+    "active": true,
+    "last_fetched": "2026-05-20 16:09",
+    "last_status": "OK"
+  },
+  {
+    "name": "Cyber / information",
+    "search_term": "cyber",
+    "document_types": [
+      "PRORULE",
+      "NOTICE"
+    ],
+    "active": true,
+    "last_fetched": "2026-05-20 16:09",
+    "last_status": "OK"
+  }
+]

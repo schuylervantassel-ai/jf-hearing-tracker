@@ -62,6 +62,9 @@ Set in Render → **Environment**:
 | `RSS_AUTO_PULL` | `1` | `0` to disable background import |
 | `RSS_PULL_INTERVAL_MINUTES` | `60` | Minutes between auto-pulls |
 | `RSS_AUTO_PULL_INITIAL_DELAY_SEC` | `10` | Delay before first pull |
+| `FR_AUTO_PULL` | `0` | Set `1` to auto-pull Federal Register watchlist on Render |
+| `FR_PULL_INTERVAL_MINUTES` | `360` | Minutes between FR auto-pulls (min 60) |
+| `FEDERAL_REGISTER_API_KEY` | — | Optional; FR API needs no key (for future Regulations.gov) |
 
 ---
 

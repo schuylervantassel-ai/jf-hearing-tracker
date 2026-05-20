@@ -14,8 +14,10 @@ import re
 import ssl
 import sys
 from datetime import datetime, date
+from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 from urllib.error import URLError
+import time
 import xml.etree.ElementTree as ET
 
 # ── Optional feedparser (better date parsing) ─────────────────────────────────
@@ -850,6 +852,240 @@ def pull_congress_api(hearings, api_key, silent=False):
 
     if new_items:
         save_data(hearings)
+    return new_items
+
+# ── Federal Register API ──────────────────────────────────────────────────────
+
+FR_DOCUMENTS_FILE = _data_path("fr_documents.json")
+FR_WATCHLIST_FILE   = _data_path("fr_watchlist.json")
+FR_API_BASE         = "https://www.federalregister.gov/api/v1"
+FR_CUTOFF_DAYS      = 180
+FR_PER_PAGE         = 100
+FR_REQUEST_DELAY    = 0.12   # stay under ~10 req/s
+
+FR_DOCUMENT_TYPES = ["PRORULE", "RULE", "NOTICE"]
+FR_WORKFLOW_STATUSES = [
+    "Watching", "Drafting", "Ready to file", "Filed", "Closed",
+]
+
+DEFAULT_FR_WATCHLIST = [
+    {
+        "name": "Sanctions / OFAC",
+        "search_term": "sanctions",
+        "document_types": ["PRORULE", "NOTICE"],
+        "active": True,
+    },
+    {
+        "name": "Export controls",
+        "search_term": "export control",
+        "document_types": ["PRORULE", "NOTICE"],
+        "active": True,
+    },
+    {
+        "name": "China / Indo-Pacific",
+        "search_term": "China",
+        "document_types": ["PRORULE", "NOTICE"],
+        "active": True,
+    },
+    {
+        "name": "Russia / Eurasia",
+        "search_term": "Russia",
+        "document_types": ["PRORULE", "NOTICE"],
+        "active": True,
+    },
+    {
+        "name": "Human rights",
+        "search_term": "human rights",
+        "document_types": ["PRORULE", "NOTICE"],
+        "active": True,
+    },
+    {
+        "name": "Cyber / information",
+        "search_term": "cyber",
+        "document_types": ["PRORULE", "NOTICE"],
+        "active": True,
+    },
+]
+
+
+def load_fr_documents():
+    if os.path.exists(FR_DOCUMENTS_FILE):
+        with open(FR_DOCUMENTS_FILE) as f:
+            return json.load(f)
+    return []
+
+
+def save_fr_documents(documents):
+    with open(FR_DOCUMENTS_FILE, "w") as f:
+        json.dump(documents, f, indent=2)
+
+
+def load_fr_watchlist():
+    if os.path.exists(FR_WATCHLIST_FILE):
+        with open(FR_WATCHLIST_FILE) as f:
+            return json.load(f)
+    save_fr_watchlist(DEFAULT_FR_WATCHLIST)
+    return [dict(w) for w in DEFAULT_FR_WATCHLIST]
+
+
+def save_fr_watchlist(watchlist):
+    with open(FR_WATCHLIST_FILE, "w") as f:
+        json.dump(watchlist, f, indent=2)
+
+
+def fr_next_id(documents):
+    return max((d["id"] for d in documents), default=0) + 1
+
+
+def fr_agency_names(doc):
+    agencies = doc.get("agencies") or []
+    return [a.get("name", "") for a in agencies if a.get("name")]
+
+
+def fr_comment_period_label(comments_close_on):
+    """Human-readable comment window from comments_close_on (YYYY-MM-DD)."""
+    if not comments_close_on:
+        return "No deadline listed"
+    try:
+        close = date.fromisoformat(comments_close_on[:10])
+    except Exception:
+        return "Unknown"
+    today = date.today()
+    if close < today:
+        return "Closed"
+    days = (close - today).days
+    if days == 0:
+        return "Closes today"
+    if days <= 7:
+        return f"Closes in {days}d"
+    if days <= 14:
+        return f"Closes in {days}d"
+    return "Open"
+
+
+def fr_regulations_url(docket_ids):
+    if docket_ids:
+        return f"https://www.regulations.gov/docket/{docket_ids[0]}"
+    return ""
+
+
+def fr_fetch_documents(search_term, document_types, per_page=FR_PER_PAGE):
+    """Query Federal Register API; returns list of document dicts from API."""
+    params = [
+        ("per_page", str(per_page)),
+        ("page", "1"),
+        ("order", "newest"),
+        ("conditions[term]", search_term.strip()),
+    ]
+    for dtype in document_types or FR_DOCUMENT_TYPES:
+        params.append(("conditions[type][]", dtype))
+    url = f"{FR_API_BASE}/documents.json?{urlencode(params)}"
+    headers = {"User-Agent": "Mozilla/5.0 (Jamestown Foundation Hearing Tracker)"}
+    req = Request(url, headers=headers)
+    ctx = _make_ssl_context()
+    with urlopen(req, timeout=30, context=ctx) as resp:
+        data = json.loads(resp.read())
+    return data.get("results") or []
+
+
+def _fr_doc_from_api(raw, watch_name):
+    """Map Federal Register API document to stored record."""
+    title = (raw.get("title") or "").strip()
+    abstract = (raw.get("abstract") or "").strip()
+    agencies = fr_agency_names(raw)
+    docket_ids = raw.get("docket_ids") or []
+    if isinstance(docket_ids, str):
+        docket_ids = [docket_ids] if docket_ids else []
+    comments_close = raw.get("comments_close_on")
+    if comments_close:
+        comments_close = str(comments_close)[:10]
+    pub = raw.get("publication_date") or ""
+    if pub:
+        pub = str(pub)[:10]
+    text_for_angle = f"{title} {abstract} {' '.join(agencies)}"
+    return {
+        "document_number": raw.get("document_number", ""),
+        "title": title,
+        "abstract": abstract[:2000] if abstract else "",
+        "publication_date": pub,
+        "comments_close_on": comments_close,
+        "type": raw.get("type") or "",
+        "agencies": agencies,
+        "html_url": raw.get("html_url") or "",
+        "docket_ids": docket_ids,
+        "regulations_url": fr_regulations_url(docket_ids),
+        "angle": detect_angle(text_for_angle),
+        "workflow_status": "Watching",
+        "draft_comment": "",
+        "notes": "",
+        "watch_name": watch_name,
+        "source": "federal_register_api",
+    }
+
+
+def pull_federal_register(documents, watchlist, silent=False):
+    """
+    Pull documents for each active watchlist search term.
+    Returns list of newly added document dicts (with id assigned).
+    """
+    new_items = []
+    cutoff = date.today().toordinal() - FR_CUTOFF_DAYS
+    by_number = {d["document_number"]: d for d in documents if d.get("document_number")}
+
+    for watch in watchlist:
+        if not watch.get("active", True):
+            continue
+        term = (watch.get("search_term") or "").strip()
+        if not term:
+            continue
+        name = watch.get("name") or term
+        dtypes = watch.get("document_types") or FR_DOCUMENT_TYPES
+        if not silent:
+            print(f"  Federal Register: {name} ({term!r}) ... ", end="", flush=True)
+        try:
+            time.sleep(FR_REQUEST_DELAY)
+            results = fr_fetch_documents(term, dtypes)
+            added = 0
+            updated = 0
+            for raw in results:
+                dn = raw.get("document_number")
+                if not dn:
+                    continue
+                pub = raw.get("publication_date") or ""
+                try:
+                    if pub and date.fromisoformat(str(pub)[:10]).toordinal() < cutoff:
+                        continue
+                except Exception:
+                    pass
+                mapped = _fr_doc_from_api(raw, name)
+                if dn in by_number:
+                    existing = by_number[dn]
+                    if mapped.get("comments_close_on"):
+                        existing["comments_close_on"] = mapped["comments_close_on"]
+                        updated += 1
+                    continue
+                mapped["id"] = fr_next_id(documents + new_items)
+                mapped["created"] = datetime.now().strftime("%Y-%m-%d")
+                new_items.append(mapped)
+                documents.append(mapped)
+                by_number[dn] = mapped
+                added += 1
+            watch["last_fetched"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            watch["last_status"] = "OK"
+            if not silent:
+                up = f", {updated} updated" if updated else ""
+                print(f"{added} new{up}")
+        except URLError as e:
+            watch["last_status"] = f"Error: {e.reason}"
+            if not silent:
+                print(f"FAILED ({e.reason})")
+        except Exception as e:
+            watch["last_status"] = f"Error: {e}"
+            if not silent:
+                print(f"FAILED ({e})")
+
+    save_fr_documents(documents)
+    save_fr_watchlist(watchlist)
     return new_items
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────

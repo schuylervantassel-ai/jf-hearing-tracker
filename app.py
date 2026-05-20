@@ -22,6 +22,8 @@ RSS_AUTO_PULL_ENABLED = _env_truthy("RSS_AUTO_PULL", "1")
 RSS_POLL_INTERVAL_MIN = max(1, int(os.environ.get("RSS_PULL_INTERVAL_MINUTES", "60")))
 # Seconds to wait before the first auto-pull (subsequent waits use the interval above).
 RSS_AUTO_PULL_INITIAL_DELAY_SEC = max(0, int(os.environ.get("RSS_AUTO_PULL_INITIAL_DELAY_SEC", "10")))
+FR_AUTO_PULL_ENABLED = _env_truthy("FR_AUTO_PULL", "0")
+FR_PULL_INTERVAL_MIN = max(60, int(os.environ.get("FR_PULL_INTERVAL_MINUTES", "360")))
 DATA_LOCK = threading.Lock()
 _last_pull: dict = {"ts": None, "new_rss": 0, "new_api": 0, "new_social": 0}
 
@@ -55,6 +57,8 @@ def _seed_persistent_data() -> None:
         "social_config.json",
         "social_feed.json",
         "congress_api.json",
+        "fr_watchlist.json",
+        "fr_documents.json",
     ):
         dest = os.path.join(data_dir, name)
         src = os.path.join(BASE_DIR, name)
@@ -70,6 +74,8 @@ from comit import (
     save_data, save_feeds,
     load_social_feeds, save_social_feeds, load_social_items, pull_social_feeds,
     build_heatmap_points, DC_BUILDINGS,
+    load_fr_documents, save_fr_documents, load_fr_watchlist, save_fr_watchlist,
+    pull_federal_register, fr_comment_period_label, FR_WORKFLOW_STATUSES,
 )
 import json as _json
 
@@ -113,6 +119,28 @@ def action_cls(action):
         "No action needed": "bg-emerald-100 text-emerald-700",
     }.get(action, "bg-slate-100 text-slate-600")
 
+def fr_workflow_cls(status):
+    return {
+        "Watching":        "bg-slate-100 text-slate-600",
+        "Drafting":        "bg-amber-100 text-amber-800",
+        "Ready to file":   "bg-blue-100 text-blue-800",
+        "Filed":           "bg-emerald-100 text-emerald-800",
+        "Closed":          "bg-slate-200 text-slate-500",
+    }.get(status, "bg-slate-100 text-slate-600")
+
+def fr_period_cls(comments_close_on):
+    label = fr_comment_period_label(comments_close_on)
+    if label == "Closed":
+        return "bg-slate-100 text-slate-500"
+    if label in ("Closes today",) or label.startswith("Closes in"):
+        return "bg-red-100 text-red-800"
+    if label == "Open":
+        return "bg-emerald-100 text-emerald-800"
+    return "bg-slate-100 text-slate-500"
+
+def fr_period_label(comments_close_on):
+    return fr_comment_period_label(comments_close_on)
+
 def days_away(date_str):
     try:
         return (date.fromisoformat(date_str) - date.today()).days
@@ -125,6 +153,9 @@ app.jinja_env.globals.update(
     status_cls=status_cls,
     angle_cls=angle_cls,
     action_cls=action_cls,
+    fr_workflow_cls=fr_workflow_cls,
+    fr_period_cls=fr_period_cls,
+    fr_period_label=fr_period_label,
     days_away=days_away,
     today=date.today,
     abs=abs,
@@ -293,6 +324,145 @@ def edit_hearing(hid):
     )
 
 
+# ── Federal Register ──────────────────────────────────────────────────────────
+
+def _fr_filter_documents(documents, q, wf, cf):
+    filtered = documents
+    if q:
+        filtered = [
+            d for d in filtered
+            if q in (d.get("title") or "").lower()
+            or q in (d.get("abstract") or "").lower()
+            or q in " ".join(d.get("agencies") or []).lower()
+            or q in (d.get("document_number") or "").lower()
+            or any(q in (x or "").lower() for x in (d.get("docket_ids") or []))
+        ]
+    if wf:
+        filtered = [d for d in filtered if d.get("workflow_status") == wf]
+    today = date.today()
+    if cf == "open":
+        filtered = [
+            d for d in filtered
+            if d.get("comments_close_on")
+            and d["comments_close_on"] >= today.isoformat()
+        ]
+    elif cf == "soon":
+        filtered = [
+            d for d in filtered
+            if d.get("comments_close_on")
+            and 0 <= (date.fromisoformat(d["comments_close_on"][:10]) - today).days <= 14
+        ]
+    elif cf == "closed":
+        filtered = [
+            d for d in filtered
+            if d.get("comments_close_on")
+            and d["comments_close_on"] < today.isoformat()
+        ]
+    filtered.sort(
+        key=lambda x: (x.get("comments_close_on") or "9999-99-99", x.get("publication_date") or ""),
+    )
+    return filtered
+
+
+@app.route("/federal-register")
+def federal_register_list():
+    documents = load_fr_documents()
+    q = request.args.get("q", "").lower().strip()
+    wf = request.args.get("workflow", "")
+    cf = request.args.get("comments", "")
+    filtered = _fr_filter_documents(documents, q, wf, cf)
+    return render_template(
+        "federal_register.html",
+        documents=filtered,
+        total_all=len(documents),
+        watchlist=load_fr_watchlist(),
+        workflow_statuses=FR_WORKFLOW_STATUSES,
+        fr_api_key=_load_fr_api_key(),
+        q=request.args.get("q", ""),
+        wf=wf,
+        cf=cf,
+    )
+
+
+@app.route("/federal-register/pull", methods=["POST"])
+def fr_pull():
+    with DATA_LOCK:
+        documents = load_fr_documents()
+        watchlist = load_fr_watchlist()
+        new_items = pull_federal_register(documents, watchlist, silent=True)
+    flash(f"{len(new_items)} new Federal Register document(s) imported.", "success")
+    return redirect(url_for("federal_register_list"))
+
+
+@app.route("/federal-register/<int:did>")
+def fr_detail(did):
+    documents = load_fr_documents()
+    d = next((x for x in documents if x["id"] == did), None)
+    if not d:
+        flash("Document not found.", "error")
+        return redirect(url_for("federal_register_list"))
+    return render_template(
+        "fr_detail.html",
+        d=d,
+        workflow_statuses=FR_WORKFLOW_STATUSES,
+    )
+
+
+@app.route("/federal-register/<int:did>/save", methods=["POST"])
+def fr_save(did):
+    with DATA_LOCK:
+        documents = load_fr_documents()
+        d = next((x for x in documents if x["id"] == did), None)
+        if not d:
+            flash("Document not found.", "error")
+            return redirect(url_for("federal_register_list"))
+        if "workflow_status" in request.form:
+            ws = request.form.get("workflow_status")
+            if ws in FR_WORKFLOW_STATUSES:
+                d["workflow_status"] = ws
+        if "draft_comment" in request.form:
+            d["draft_comment"] = request.form.get("draft_comment", "")
+        if "notes" in request.form:
+            d["notes"] = request.form.get("notes", "")
+        save_fr_documents(documents)
+    flash("Document updated.", "success")
+    return redirect(url_for("fr_detail", did=did))
+
+
+@app.route("/federal-register/<int:did>/delete", methods=["POST"])
+def fr_delete(did):
+    with DATA_LOCK:
+        documents = [x for x in load_fr_documents() if x["id"] != did]
+        save_fr_documents(documents)
+    flash("Document removed.", "info")
+    return redirect(url_for("federal_register_list"))
+
+
+@app.route("/federal-register/watch/toggle/<int:idx>", methods=["POST"])
+def fr_toggle_watch(idx):
+    with DATA_LOCK:
+        watchlist = load_fr_watchlist()
+        if 0 <= idx < len(watchlist):
+            watchlist[idx]["active"] = not watchlist[idx].get("active", True)
+            save_fr_watchlist(watchlist)
+    return redirect(url_for("federal_register_list"))
+
+
+@app.route("/federal-register/watch/add", methods=["POST"])
+def fr_add_watch():
+    with DATA_LOCK:
+        watchlist = load_fr_watchlist()
+        watchlist.append({
+            "name": request.form["name"].strip(),
+            "search_term": request.form["search_term"].strip(),
+            "document_types": ["PRORULE", "NOTICE"],
+            "active": True,
+        })
+        save_fr_watchlist(watchlist)
+    flash(f"Watch “{request.form['name'].strip()}” added.", "success")
+    return redirect(url_for("federal_register_list"))
+
+
 @app.route("/delete/<int:hid>", methods=["POST"])
 def delete_hearing(hid):
     with DATA_LOCK:
@@ -303,6 +473,17 @@ def delete_hearing(hid):
 
 
 _API_KEY_FILE = os.path.join(_data_root(), "congress_api.json")
+_FR_API_KEY_FILE = os.path.join(_data_root(), "federal_register_api.json")
+
+def _load_fr_api_key():
+    key = os.environ.get("FEDERAL_REGISTER_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        with open(_FR_API_KEY_FILE) as f:
+            return _json.load(f).get("api_key", "")
+    except Exception:
+        return ""
 
 def _load_api_key():
     try:
@@ -688,6 +869,30 @@ if __name__ == "__main__":
     app.run(debug=debug_mode, port=PORT, use_reloader=not is_bundled)
 
 
+def _auto_fr_poll_loop():
+    import time
+    interval_sec = FR_PULL_INTERVAL_MIN * 60
+    time.sleep(min(RSS_AUTO_PULL_INITIAL_DELAY_SEC, interval_sec))
+    while True:
+        time.sleep(interval_sec)
+        if not FR_AUTO_PULL_ENABLED:
+            continue
+        try:
+            with DATA_LOCK:
+                pull_federal_register(load_fr_documents(), load_fr_watchlist(), silent=True)
+            print("[FR auto-pull] completed", flush=True)
+        except Exception as e:
+            print(f"[FR auto-pull] {e}", file=sys.stderr, flush=True)
+
+
+def _start_auto_fr_poller():
+    if not FR_AUTO_PULL_ENABLED:
+        return
+    threading.Thread(target=_auto_fr_poll_loop, name="FRAutoPull", daemon=True).start()
+
+
 # Gunicorn / Render: start RSS poller in the WSGI process (use --workers 1).
 if os.environ.get("RENDER") and RSS_AUTO_PULL_ENABLED:
     _start_auto_feed_poller()
+if os.environ.get("RENDER") and FR_AUTO_PULL_ENABLED:
+    _start_auto_fr_poller()
