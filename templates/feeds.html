@@ -156,10 +156,17 @@
 
   {% if api_key %}
   <div class="mt-4 pt-4 border-t border-slate-100">
+    <p class="text-xs text-slate-500 mb-2">
+      <strong class="text-slate-700">Where your key is stored:</strong>
+      <code class="bg-slate-100 px-1 rounded text-[11px]">congress_api.json</code>
+      in the app folder (or env <code class="bg-slate-100 px-1 rounded text-[11px]">CONGRESS_API_KEY</code> on Render).
+      Never commit this file to git.
+    </p>
     <p class="text-xs text-slate-500 mb-3">
-      <strong class="text-slate-700">Tracked committees:</strong>
-      SASC · SFRC · SSCI · SHSGAC · HASC · HFAC · HPSCI · HHSC
-      &nbsp;·&nbsp; Fetches 50 most recent meetings per chamber (119th Congress)
+      <strong class="text-slate-700">Tracked committees ({{ congress_config.committee_codes|length }}):</strong>
+      {{ congress_config.committee_codes.values()|join(' · ') }}
+      &nbsp;·&nbsp; Up to {{ congress_config.limit }} meetings per chamber
+      ({{ congress_config.congress }}th Congress)
     </p>
     <form method="post" action="{{ url_for('pull_api_only') }}">
       <button type="submit"

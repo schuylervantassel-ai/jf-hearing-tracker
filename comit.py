@@ -688,20 +688,54 @@ def pull_social_feeds(social_feeds=None, silent=False):
 
 # ── Congress.gov API ──────────────────────────────────────────────────────────
 
+CONGRESS_CONFIG_FILE = _data_path("congress_config.json")
 CONGRESS_API_BASE    = "https://api.congress.gov/v3"
-CONGRESS_API_CURRENT = 119   # update when a new Congress begins
+CONGRESS_API_CURRENT = 119
+CONGRESS_API_LIMIT   = 250
 
-# Maps Congress.gov committee systemCode → app committee label
-CONGRESS_API_COMMITTEES = {
-    "ssas00": "Senate Armed Services (SASC)",
-    "ssfr00": "Senate Foreign Relations (SFRC)",
-    "slin00": "Senate Intelligence (SSCI)",
-    "ssga00": "Senate Homeland Security (SHSGAC)",
-    "hsas00": "House Armed Services (HASC)",
-    "hsfa00": "House Foreign Affairs (HFAC)",
-    "hlig00": "House Intelligence (HPSCI)",
-    "hshm00": "House Homeland Security (HHSC)",
-}
+# Default committee systemCode → label (overridden by congress_config.json if present)
+_DEFAULT_CONGRESS_COMMITTEES = [
+    {"system_code": "ssas00", "label": "Senate Armed Services (SASC)"},
+    {"system_code": "ssfr00", "label": "Senate Foreign Relations (SFRC)"},
+    {"system_code": "slin00", "label": "Senate Intelligence (SSCI)"},
+    {"system_code": "ssga00", "label": "Senate Homeland Security (SHSGAC)"},
+    {"system_code": "hsas00", "label": "House Armed Services (HASC)"},
+    {"system_code": "hsfa00", "label": "House Foreign Affairs (HFAC)"},
+    {"system_code": "hlig00", "label": "House Intelligence (HPSCI)"},
+    {"system_code": "hshm00", "label": "House Homeland Security (HHSC)"},
+]
+
+
+def load_congress_config():
+    """API endpoints + tracked committee system codes for Congress.gov pulls."""
+    if os.path.exists(CONGRESS_CONFIG_FILE):
+        with open(CONGRESS_CONFIG_FILE) as f:
+            cfg = json.load(f)
+    else:
+        cfg = {
+            "congress": CONGRESS_API_CURRENT,
+            "api_base": CONGRESS_API_BASE,
+            "meetings_limit_per_chamber": CONGRESS_API_LIMIT,
+            "chambers": ["house", "senate"],
+            "committees": _DEFAULT_CONGRESS_COMMITTEES,
+        }
+    committees = cfg.get("committees") or _DEFAULT_CONGRESS_COMMITTEES
+    code_map = {
+        c["system_code"]: c["label"]
+        for c in committees
+        if c.get("system_code") and c.get("label")
+    }
+    return {
+        "congress": int(cfg.get("congress", CONGRESS_API_CURRENT)),
+        "api_base": cfg.get("api_base", CONGRESS_API_BASE).rstrip("/"),
+        "limit": int(cfg.get("meetings_limit_per_chamber", CONGRESS_API_LIMIT)),
+        "chambers": cfg.get("chambers") or ["house", "senate"],
+        "committee_codes": code_map,
+    }
+
+
+# Back-compat alias used elsewhere
+CONGRESS_API_COMMITTEES = load_congress_config()["committee_codes"]
 
 def fetch_json(url, api_key):
     """GET a URL from the Congress.gov API and return parsed JSON."""
@@ -724,18 +758,25 @@ def pull_congress_api(hearings, api_key, silent=False):
             print("  Congress.gov API: no key configured — skipping.")
         return []
 
+    cfg = load_congress_config()
+    committee_codes = cfg["committee_codes"]
+    congress = cfg["congress"]
+    api_base = cfg["api_base"]
+    limit = min(cfg["limit"], 250)
+
     new_items = []
     cutoff = date.today().toordinal() - RSS_CUTOFF_DAYS
     existing_ids = {h.get("congress_event_id") for h in hearings
                     if h.get("congress_event_id")}
 
-    for chamber in ("house", "senate"):
+    for chamber in cfg["chambers"]:
         if not silent:
             print(f"  Congress.gov API ({chamber}) ... ", end="", flush=True)
         added = 0
         try:
-            list_url = (f"{CONGRESS_API_BASE}/committee-meeting/"
-                        f"{CONGRESS_API_CURRENT}/{chamber}?limit=50")
+            list_url = (
+                f"{api_base}/committee-meeting/{congress}/{chamber}?limit={limit}"
+            )
             data     = fetch_json(list_url, api_key)
             meetings = data.get("committeeMeetings", [])
 
@@ -758,8 +799,8 @@ def pull_congress_api(hearings, api_key, silent=False):
                 committee_name = None
                 for c in m.get("committees", []):
                     sc = c.get("systemCode", "")
-                    if sc in CONGRESS_API_COMMITTEES:
-                        committee_name = CONGRESS_API_COMMITTEES[sc]
+                    if sc in committee_codes:
+                        committee_name = committee_codes[sc]
                         break
                 if not committee_name:
                     continue
@@ -834,7 +875,7 @@ def pull_congress_api(hearings, api_key, silent=False):
                     "questions":         "",
                     "notes":             "; ".join(notes_parts),
                     "url":               (f"https://www.congress.gov/committee-meeting/"
-                                          f"{CONGRESS_API_CURRENT}/{chamber}/{event_id}"),
+                                          f"{congress}/{chamber}/{event_id}"),
                     "source":            "api",
                     "congress_event_id": event_id,
                     "created":           datetime.now().strftime("%Y-%m-%d"),

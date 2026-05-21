@@ -57,6 +57,7 @@ def _seed_persistent_data() -> None:
         "social_config.json",
         "social_feed.json",
         "congress_api.json",
+        "congress_config.json",
         "fr_watchlist.json",
         "fr_documents.json",
     ):
@@ -76,6 +77,7 @@ from comit import (
     build_heatmap_points, DC_BUILDINGS,
     load_fr_documents, save_fr_documents, load_fr_watchlist, save_fr_watchlist,
     pull_federal_register, fr_comment_period_label, FR_WORKFLOW_STATUSES,
+    load_congress_config,
 )
 import json as _json
 
@@ -487,6 +489,9 @@ def _load_fr_api_key():
         return ""
 
 def _load_api_key():
+    key = os.environ.get("CONGRESS_API_KEY", "").strip()
+    if key:
+        return key
     try:
         with open(_API_KEY_FILE) as f:
             return _json.load(f).get("api_key", "")
@@ -558,11 +563,13 @@ def poll_status():
 
 @app.route("/feeds")
 def feeds_page():
+    ccfg = load_congress_config()
     return render_template(
         "feeds.html",
         feeds=load_feeds(),
         committees=COMMITTEES + ["Multiple"],
         api_key=_load_api_key(),
+        congress_config=ccfg,
         rss_auto_pull_enabled=RSS_AUTO_PULL_ENABLED,
         rss_poll_interval_min=RSS_POLL_INTERVAL_MIN,
         last_pull=_last_pull,
