@@ -19,7 +19,7 @@
     "url": "https://www.intelligence.senate.gov/feed/",
     "committee": "Senate Intelligence (SSCI)",
     "active": true,
-    "last_fetched": "2026-05-20 15:08",
+    "last_fetched": "2026-05-20 16:13",
     "last_status": "OK"
   },
   {
@@ -27,7 +27,7 @@
     "url": "https://www.hsgac.senate.gov/feed/",
     "committee": "Senate Homeland Security (SHSGAC)",
     "active": true,
-    "last_fetched": "2026-05-20 15:08",
+    "last_fetched": "2026-05-20 16:13",
     "last_status": "OK"
   },
   {
@@ -43,7 +43,7 @@
     "url": "https://intelligence.house.gov/feed/",
     "committee": "House Intelligence (HPSCI)",
     "active": true,
-    "last_fetched": "2026-05-20 15:08",
+    "last_fetched": "2026-05-20 16:13",
     "last_status": "OK"
   },
   {
@@ -51,7 +51,7 @@
     "url": "https://homeland.house.gov/feed/",
     "committee": "House Homeland Security (HHSC)",
     "active": true,
-    "last_fetched": "2026-05-20 15:08",
+    "last_fetched": "2026-05-20 16:13",
     "last_status": "OK"
   },
   {
@@ -84,15 +84,15 @@
     "committee": "Senate Armed Services (SASC)",
     "active": true,
     "last_fetched": "2026-04-14 10:51",
-    "last_status": "Error: Payment Required"
+    "last_status": "Error: Not Found"
   },
   {
     "name": "The Committee on Homeland Security",
     "url": "https://rss.app/feeds/1vOAMyGiCThinS3I.xml",
     "committee": "House Homeland Security (HHSC)",
     "active": true,
-    "last_fetched": "2026-04-14 10:51",
-    "last_status": "Error: Payment Required"
+    "last_fetched": "2026-05-20 16:13",
+    "last_status": "OK"
   },
   {
     "name": "Commission On Security And Cooperation In Europe",
@@ -107,7 +107,7 @@
     "url": "https://rss.app/feeds/e4ENltqc5zrThyLM.xml",
     "committee": "House Foreign Affairs (HFAC)",
     "active": true,
-    "last_fetched": "2026-04-14 10:51",
-    "last_status": "Error: Payment Required"
+    "last_fetched": "2026-05-20 16:13",
+    "last_status": "OK"
   }
 ]
