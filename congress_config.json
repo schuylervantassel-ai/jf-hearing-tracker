@@ -1,7 +1,8 @@
 {
   "congress": 119,
   "api_base": "https://api.congress.gov/v3",
-  "meetings_limit_per_chamber": 250,
+  "meetings_limit_per_chamber": 50,
+  "max_detail_fetches_per_pull": 40,
   "chambers": ["house", "senate"],
   "committees": [
     {"system_code": "ssas00", "label": "Senate Armed Services (SASC)", "chamber": "senate"},

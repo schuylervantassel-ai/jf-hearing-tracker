@@ -691,7 +691,8 @@ def pull_social_feeds(social_feeds=None, silent=False):
 CONGRESS_CONFIG_FILE = _data_path("congress_config.json")
 CONGRESS_API_BASE    = "https://api.congress.gov/v3"
 CONGRESS_API_CURRENT = 119
-CONGRESS_API_LIMIT   = 250
+CONGRESS_API_LIMIT   = 50
+CONGRESS_MAX_DETAIL_FETCHES = 40
 
 # Default committee systemCode → label (overridden by congress_config.json if present)
 _DEFAULT_CONGRESS_COMMITTEES = [
@@ -728,10 +729,26 @@ def load_congress_config():
     return {
         "congress": int(cfg.get("congress", CONGRESS_API_CURRENT)),
         "api_base": cfg.get("api_base", CONGRESS_API_BASE).rstrip("/"),
-        "limit": int(cfg.get("meetings_limit_per_chamber", CONGRESS_API_LIMIT)),
+        "limit": min(int(cfg.get("meetings_limit_per_chamber", CONGRESS_API_LIMIT)), 250),
+        "max_detail_fetches": int(
+            cfg.get("max_detail_fetches_per_pull", CONGRESS_MAX_DETAIL_FETCHES)
+        ),
         "chambers": cfg.get("chambers") or ["house", "senate"],
         "committee_codes": code_map,
     }
+
+
+def _committee_from_system_code(system_code, committee_codes):
+    """Match full committee or subcommittee code (e.g. hsfa16 → hsfa00)."""
+    if not system_code:
+        return None
+    if system_code in committee_codes:
+        return committee_codes[system_code]
+    if len(system_code) >= 4:
+        parent = system_code[:4] + "00"
+        if parent in committee_codes:
+            return committee_codes[parent]
+    return None
 
 
 # Back-compat alias used elsewhere
@@ -744,7 +761,7 @@ def fetch_json(url, api_key):
     headers = {"User-Agent": "Mozilla/5.0 (Jamestown Foundation Hearing Tracker)"}
     req = Request(full_url, headers=headers)
     ctx = _make_ssl_context()
-    with urlopen(req, timeout=20, context=ctx) as resp:
+    with urlopen(req, timeout=12, context=ctx) as resp:
         return json.loads(resp.read())
 
 def pull_congress_api(hearings, api_key, silent=False):
@@ -762,7 +779,9 @@ def pull_congress_api(hearings, api_key, silent=False):
     committee_codes = cfg["committee_codes"]
     congress = cfg["congress"]
     api_base = cfg["api_base"]
-    limit = min(cfg["limit"], 250)
+    limit = cfg["limit"]
+    max_detail = max(1, cfg["max_detail_fetches"])
+    detail_fetches = 0
 
     new_items = []
     cutoff = date.today().toordinal() - RSS_CUTOFF_DAYS
@@ -781,6 +800,8 @@ def pull_congress_api(hearings, api_key, silent=False):
             meetings = data.get("committeeMeetings", [])
 
             for mtg in meetings:
+                if detail_fetches >= max_detail:
+                    break
                 event_id = str(mtg.get("eventId", ""))
                 if not event_id or event_id in existing_ids:
                     continue
@@ -790,17 +811,20 @@ def pull_congress_api(hearings, api_key, silent=False):
                     continue
 
                 try:
+                    detail_fetches += 1
+                    time.sleep(0.15)
                     detail = fetch_json(detail_url, api_key)
                     m = detail.get("committeeMeeting", {})
                 except Exception:
                     continue
 
-                # Match to a tracked committee
+                # Match to a tracked committee (incl. subcommittees)
                 committee_name = None
                 for c in m.get("committees", []):
-                    sc = c.get("systemCode", "")
-                    if sc in committee_codes:
-                        committee_name = committee_codes[sc]
+                    committee_name = _committee_from_system_code(
+                        c.get("systemCode", ""), committee_codes
+                    )
+                    if committee_name:
                         break
                 if not committee_name:
                     continue
@@ -886,13 +910,20 @@ def pull_congress_api(hearings, api_key, silent=False):
                 added += 1
 
             if not silent:
-                print(f"{added} new item(s)")
+                cap = f" (detail cap {max_detail})" if detail_fetches >= max_detail else ""
+                print(f"{added} new item(s){cap}")
         except Exception as e:
             if not silent:
                 print(f"FAILED ({e})")
 
     if new_items:
         save_data(hearings)
+    if not silent and detail_fetches >= max_detail:
+        print(
+            f"  Congress.gov: stopped after {max_detail} detail requests "
+            f"(re-run Pull to fetch more).",
+            flush=True,
+        )
     return new_items
 
 # ── Federal Register API ──────────────────────────────────────────────────────

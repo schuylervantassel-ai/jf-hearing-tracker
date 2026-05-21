@@ -165,8 +165,9 @@
     <p class="text-xs text-slate-500 mb-3">
       <strong class="text-slate-700">Tracked committees ({{ congress_config.committee_codes|length }}):</strong>
       {{ congress_config.committee_codes.values()|join(' · ') }}
-      &nbsp;·&nbsp; Up to {{ congress_config.limit }} meetings per chamber
-      ({{ congress_config.congress }}th Congress)
+      &nbsp;·&nbsp; {{ congress_config.limit }} meetings/chamber,
+      max {{ congress_config.max_detail_fetches }} detail lookups per pull
+      ({{ congress_config.congress }}th Congress). Click Pull again to continue.
     </p>
     <form method="post" action="{{ url_for('pull_api_only') }}">
       <button type="submit"

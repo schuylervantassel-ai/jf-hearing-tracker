@@ -578,8 +578,12 @@ def feeds_page():
 
 @app.route("/feeds/pull", methods=["POST"])
 def pull_feeds():
-    with DATA_LOCK:
-        new_rss, new_api, new_social = _run_full_feed_import()
+    try:
+        with DATA_LOCK:
+            new_rss, new_api, new_social = _run_full_feed_import()
+    except Exception as e:
+        flash(f"Feed pull failed: {e}", "error")
+        return redirect(url_for("feeds_page"))
     total        = len(new_rss) + len(new_api)
     parts        = []
     if new_rss:
@@ -587,6 +591,8 @@ def pull_feeds():
     if new_api:
         parts.append(f"{len(new_api)} from Congress.gov API")
     msg = f"{total} new hearing(s) imported" + (f" ({', '.join(parts)})" if parts else "") + "."
+    if new_api == 0 and _load_api_key():
+        msg += " (Congress.gov: run Pull again if capped—see logs.)"
     if new_social:
         msg += f" {len(new_social)} new social post(s) added."
     flash(msg, "success")
@@ -595,14 +601,21 @@ def pull_feeds():
 
 @app.route("/feeds/pull-api", methods=["POST"])
 def pull_api_only():
-    with DATA_LOCK:
-        hearings = load_data()
-        api_key  = _load_api_key()
-        if not api_key:
-            flash("Add your Congress.gov API key first.", "error")
-            return redirect(url_for("feeds_page"))
-        new_items = pull_congress_api(hearings, api_key, silent=True)
-    flash(f"{len(new_items)} new hearing(s) imported from Congress.gov API.", "success")
+    api_key = _load_api_key()
+    if not api_key:
+        flash("Add your Congress.gov API key first.", "error")
+        return redirect(url_for("feeds_page"))
+    try:
+        with DATA_LOCK:
+            hearings = load_data()
+            new_items = pull_congress_api(hearings, api_key, silent=True)
+    except Exception as e:
+        flash(f"Congress.gov pull failed: {e}", "error")
+        return redirect(url_for("feeds_page"))
+    msg = f"{len(new_items)} new hearing(s) imported from Congress.gov API."
+    if len(new_items) == 0:
+        msg += " Run Pull again to continue if more meetings are available."
+    flash(msg, "success")
     return redirect(url_for("feeds_page"))
 
 
