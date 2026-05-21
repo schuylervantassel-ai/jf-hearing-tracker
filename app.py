@@ -380,7 +380,7 @@ def federal_register_list():
         total_all=len(documents),
         watchlist=load_fr_watchlist(),
         workflow_statuses=FR_WORKFLOW_STATUSES,
-        fr_api_key=_load_fr_api_key(),
+        fr_api_key_configured=bool(_load_fr_api_key()),
         q=request.args.get("q", ""),
         wf=wf,
         cf=cf,
@@ -498,6 +498,17 @@ def _load_api_key():
     except Exception:
         return ""
 
+
+def _mask_api_key(key: str) -> str:
+    """Display hint only — never show full key in HTML."""
+    key = (key or "").strip()
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "••••"
+    return "•" * (len(key) - 4) + key[-4:]
+
+
 def _save_api_key(key):
     with open(_API_KEY_FILE, "w") as f:
         _json.dump({"api_key": key}, f)
@@ -568,7 +579,8 @@ def feeds_page():
         "feeds.html",
         feeds=load_feeds(),
         committees=COMMITTEES + ["Multiple"],
-        api_key=_load_api_key(),
+        api_key_configured=bool(_load_api_key()),
+        api_key_masked=_mask_api_key(_load_api_key()),
         congress_config=ccfg,
         rss_auto_pull_enabled=RSS_AUTO_PULL_ENABLED,
         rss_poll_interval_min=RSS_POLL_INTERVAL_MIN,
@@ -621,9 +633,18 @@ def pull_api_only():
 
 @app.route("/feeds/api-key", methods=["POST"])
 def save_api_key():
+    # Clear when empty submit from Clear button
+    if "api_key" in request.form and not request.form.get("api_key", "").strip():
+        if os.path.exists(_API_KEY_FILE):
+            os.remove(_API_KEY_FILE)
+        flash("Congress.gov API key cleared.", "info")
+        return redirect(url_for("feeds_page"))
     key = request.form.get("api_key", "").strip()
+    if not key:
+        flash("Enter a key to save, or use Clear to remove the stored key.", "error")
+        return redirect(url_for("feeds_page"))
     _save_api_key(key)
-    flash("Congress.gov API key saved." if key else "API key cleared.", "success")
+    flash("Congress.gov API key saved. It is not shown again in the browser.", "success")
     return redirect(url_for("feeds_page"))
 
 
