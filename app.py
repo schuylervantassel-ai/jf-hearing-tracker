@@ -521,9 +521,12 @@ def _run_full_feed_import():
     social_feeds = load_social_feeds()
     new_rss = pull_rss_feeds(hearings, feeds, silent=True)
     api_key = _load_api_key()
-    new_api = pull_congress_api(hearings, api_key, silent=True) if api_key else []
+    api_result = (
+        pull_congress_api(hearings, api_key, silent=True) if api_key else {"new": [], "updated": 0}
+    )
+    new_api = api_result.get("new", [])
     new_social = pull_social_feeds(social_feeds, silent=True)
-    return new_rss, new_api, new_social
+    return new_rss, new_api, new_social, api_result.get("updated", 0)
 
 
 def _auto_feed_poll_loop():
@@ -544,7 +547,7 @@ def _auto_feed_poll_loop():
             continue
         try:
             with DATA_LOCK:
-                new_rss, new_api, new_social = _run_full_feed_import()
+                new_rss, new_api, new_social, api_upd = _run_full_feed_import()
             nr, na, ns = len(new_rss), len(new_api), len(new_social)
             _last_pull["ts"] = datetime.now(timezone.utc).isoformat()
             _last_pull["new_rss"] = nr
@@ -592,7 +595,7 @@ def feeds_page():
 def pull_feeds():
     try:
         with DATA_LOCK:
-            new_rss, new_api, new_social = _run_full_feed_import()
+            new_rss, new_api, new_social, api_upd = _run_full_feed_import()
     except Exception as e:
         flash(f"Feed pull failed: {e}", "error")
         return redirect(url_for("feeds_page"))
@@ -601,10 +604,12 @@ def pull_feeds():
     if new_rss:
         parts.append(f"{len(new_rss)} from RSS")
     if new_api:
-        parts.append(f"{len(new_api)} from Congress.gov API")
+        parts.append(f"{len(new_api)} new from Congress.gov API")
+    if api_upd:
+        parts.append(f"{api_upd} updated from Congress.gov API")
     msg = f"{total} new hearing(s) imported" + (f" ({', '.join(parts)})" if parts else "") + "."
-    if new_api == 0 and _load_api_key():
-        msg += " (Congress.gov: run Pull again if capped—see logs.)"
+    if api_upd and not new_api and not new_rss:
+        msg = f"{api_upd} hearing(s) updated from Congress.gov API."
     if new_social:
         msg += f" {len(new_social)} new social post(s) added."
     flash(msg, "success")
@@ -620,13 +625,20 @@ def pull_api_only():
     try:
         with DATA_LOCK:
             hearings = load_data()
-            new_items = pull_congress_api(hearings, api_key, silent=True)
+            result = pull_congress_api(hearings, api_key, silent=True)
     except Exception as e:
         flash(f"Congress.gov pull failed: {e}", "error")
         return redirect(url_for("feeds_page"))
-    msg = f"{len(new_items)} new hearing(s) imported from Congress.gov API."
-    if len(new_items) == 0:
-        msg += " Run Pull again to continue if more meetings are available."
+    new_n = len(result.get("new", []))
+    upd_n = result.get("updated", 0)
+    if new_n and upd_n:
+        msg = f"Congress.gov: {new_n} new, {upd_n} updated."
+    elif new_n:
+        msg = f"{new_n} new hearing(s) from Congress.gov API."
+    elif upd_n:
+        msg = f"{upd_n} hearing(s) updated from Congress.gov API."
+    else:
+        msg = "Congress.gov: no new or updated hearings (API may lack dates for some meetings)."
     flash(msg, "success")
     return redirect(url_for("feeds_page"))
 
