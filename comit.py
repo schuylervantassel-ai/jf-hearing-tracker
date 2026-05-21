@@ -37,7 +37,10 @@ def _data_path(filename: str) -> str:
 
 DATA_FILE    = _data_path("hearings.json")
 CONFIG_FILE  = _data_path("rss_config.json")
+GOVTRACK_CACHE_FILE = _data_path("govtrack_committees.json")
 SOCIAL_FILE  = _data_path("social_feed.json")
+SENATE_SCHEDULE_URL = "https://www.senate.gov/general/committee_schedules/hearings.xml"
+GOVTRACK_API_BASE = "https://www.govtrack.us/api/v2"
 SOCIAL_LIMIT = 500   # max items to keep across all social feeds
 
 # ── RSS Feeds ─────────────────────────────────────────────────────────────────
@@ -89,12 +92,6 @@ DEFAULT_FEEDS = [
         "url": "https://homeland.house.gov/feed/",
         "committee": "House Homeland Security (HHSC)",
         "active": True,
-    },
-    {
-        "name": "GovTrack - Committee Hearings",
-        "url": "https://www.govtrack.us/congress/committees/hearings/feed",
-        "committee": "Multiple",
-        "active": False,  # Feed removed by GovTrack
     },
     {
         "name": "GovInfo - All Congressional Hearings",
@@ -600,6 +597,241 @@ def pull_rss_feeds(hearings, feeds, silent=False):
     save_data(hearings)
     save_feeds(feeds)
     return new_items
+
+# ── GovTrack + Senate schedule (committee on-goings) ─────────────────────────
+
+def fetch_govtrack_json(path):
+    """GET GovTrack API v2 (no key required). path e.g. '/committee?code=SSAS'."""
+    url = GOVTRACK_API_BASE + path
+    headers = {"User-Agent": "Mozilla/5.0 (Jamestown Foundation Hearing Tracker)"}
+    req = Request(url, headers=headers)
+    ctx = _make_ssl_context()
+    try:
+        with urlopen(req, timeout=12, context=ctx) as resp:
+            return json.loads(resp.read())
+    except ssl.SSLCertVerificationError:
+        fallback = ssl.create_default_context()
+        fallback.check_hostname = False
+        fallback.verify_mode = ssl.CERT_NONE
+        with urlopen(req, timeout=12, context=fallback) as resp:
+            return json.loads(resp.read())
+
+
+def load_govtrack_cache():
+    if os.path.exists(GOVTRACK_CACHE_FILE):
+        with open(GOVTRACK_CACHE_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_govtrack_cache(data):
+    with open(GOVTRACK_CACHE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def refresh_govtrack_committee_cache(silent=False):
+    """Pull committee metadata from GovTrack.us for each tracked committee."""
+    cfg = load_congress_config()
+    prior = load_govtrack_cache()
+    cache = {
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "committees": dict(prior.get("committees") or {}),
+    }
+    for entry in cfg.get("committees") or []:
+        code = entry.get("govtrack_code") or ""
+        label = entry.get("label", "")
+        if not code:
+            continue
+        if not silent:
+            print(f"  GovTrack ({label}) ... ", end="", flush=True)
+        try:
+            data = fetch_govtrack_json(f"/committee?code={code}&limit=1")
+            objs = data.get("objects") or []
+            if not objs:
+                if not silent:
+                    print("not found")
+                continue
+            o = objs[0]
+            cache["committees"][label] = {
+                "govtrack_code": code,
+                "name": o.get("name", label),
+                "abbrev": o.get("abbrev", ""),
+                "jurisdiction": o.get("jurisdiction", ""),
+                "jurisdiction_link": o.get("jurisdiction_link", ""),
+                "official_url": o.get("url", ""),
+                "govtrack_url": f"https://www.govtrack.us/congress/committees/{code}",
+                "chamber": o.get("committee_type", entry.get("chamber", "")),
+            }
+            if not silent:
+                print("OK")
+        except Exception as e:
+            if not silent:
+                print(f"FAILED ({e})")
+    save_govtrack_cache(cache)
+    return cache
+
+
+def _fetch_senate_schedule_xml():
+    headers = {"User-Agent": "Mozilla/5.0 (Jamestown Foundation Hearing Tracker)"}
+    url = load_congress_config().get("senate_schedule_url") or SENATE_SCHEDULE_URL
+    req = Request(url, headers=headers)
+    ctx = _make_ssl_context()
+    with urlopen(req, timeout=15, context=ctx) as resp:
+        return resp.read()
+
+
+def pull_senate_schedule(hearings, silent=False):
+    """
+    Import upcoming Senate committee meetings from the official schedule XML
+    (same source GovTrack uses — see govtrack.us/about-our-data).
+    """
+    cfg = load_congress_config()
+    code_map = cfg["committee_codes"]
+    congress = cfg["congress"]
+    new_items = []
+    updated = 0
+    if not silent:
+        print("  Senate committee schedule (XML) ... ", end="", flush=True)
+    try:
+        root = ET.fromstring(_fetch_senate_schedule_xml())
+    except Exception as e:
+        if not silent:
+            print(f"FAILED ({e})")
+        return {"new": [], "updated": 0}
+
+    today = date.today().isoformat()
+    for mtg in root.findall("meeting"):
+        cmte_code = (mtg.findtext("cmte_code") or "").lower()
+        committee_name = _committee_from_system_code(cmte_code, code_map)
+        if not committee_name:
+            continue
+        event_id = (mtg.findtext("identifier") or "").strip()
+        matter = clean_html(mtg.findtext("matter") or "")
+        if not matter and not event_id:
+            continue
+        meeting_date = (mtg.findtext("date_iso_8601") or "")[:10]
+        if not meeting_date or not meeting_date[0].isdigit():
+            meeting_date = date.today().isoformat()
+        title = matter[:500] if matter else f"{committee_name} – Senate meeting"
+        sub = mtg.findtext("sub_cmte") or ""
+        room = mtg.findtext("room") or ""
+        video = mtg.findtext("video_url") or ""
+        notes_parts = []
+        if sub:
+            notes_parts.append(sub)
+        if room:
+            notes_parts.append(room)
+        if video:
+            notes_parts.append(video)
+        notes = "; ".join(notes_parts)
+
+        status = "Upcoming" if meeting_date >= today else "Completed"
+        hearing = _find_hearing_for_api(hearings, event_id, committee_name, title)
+        if hearing:
+            hearing["committee"] = committee_name
+            hearing["topic"] = title
+            hearing["date"] = meeting_date
+            hearing["status"] = status
+            hearing["notes"] = notes
+            hearing["url"] = (
+                f"https://www.congress.gov/committee-meeting/{congress}/senate/{event_id}"
+            )
+            hearing["congress_event_id"] = event_id
+            hearing["source"] = "schedule"
+            hearing["angle"] = detect_angle(title)
+            updated += 1
+        else:
+            if is_duplicate(hearings + new_items, title, committee_name):
+                continue
+            h = {
+                "id": next_id(hearings + new_items),
+                "date": meeting_date,
+                "committee": committee_name,
+                "topic": title,
+                "witnesses": "",
+                "angle": detect_angle(title),
+                "action": "Monitor only",
+                "status": status,
+                "questions": "",
+                "notes": notes,
+                "url": (
+                    f"https://www.congress.gov/committee-meeting/"
+                    f"{congress}/senate/{event_id}"
+                ),
+                "congress_event_id": event_id,
+                "source": "schedule",
+                "created": date.today().isoformat(),
+            }
+            new_items.append(h)
+            hearings.append(h)
+
+    save_data(hearings)
+    if not silent:
+        print(f"{len(new_items)} new, {updated} updated")
+    return {"new": new_items, "updated": updated}
+
+
+def build_committee_ongoings(hearings, govtrack_cache=None):
+    """
+    Group hearings and metadata by tracked committee for the on-goings page.
+    Returns list of dicts sorted by label.
+    """
+    if govtrack_cache is None:
+        govtrack_cache = load_govtrack_cache()
+    gt = govtrack_cache.get("committees") or {}
+    cfg = load_congress_config()
+    today = date.today()
+    horizon = (today.toordinal() + 21)  # upcoming window ~3 weeks
+    news_cutoff = today.toordinal() - 30
+
+    sections = []
+    for entry in cfg.get("committees") or []:
+        label = entry.get("label", "")
+        if not label:
+            continue
+        comm_hearings = [h for h in hearings if h.get("committee") == label]
+
+        def _sort_key(h):
+            try:
+                return date.fromisoformat(h.get("date", "9999"))
+            except Exception:
+                return date.max
+
+        upcoming = []
+        recent = []
+        news = []
+        for h in comm_hearings:
+            try:
+                d_ord = date.fromisoformat(h.get("date", today.isoformat())).toordinal()
+            except Exception:
+                d_ord = today.toordinal()
+            src = h.get("source", "")
+            st = h.get("status", "")
+            if st == "Upcoming" and d_ord >= today.toordinal() and d_ord <= horizon:
+                upcoming.append(h)
+            elif d_ord >= today.toordinal() - 14:
+                recent.append(h)
+            if src == "rss" and d_ord >= news_cutoff:
+                news.append(h)
+
+        upcoming.sort(key=_sort_key)
+        recent.sort(key=_sort_key, reverse=True)
+        news.sort(key=_sort_key, reverse=True)
+
+        meta = gt.get(label) or {}
+        sections.append({
+            "label": label,
+            "chamber": entry.get("chamber", ""),
+            "system_code": entry.get("system_code", ""),
+            "govtrack_code": entry.get("govtrack_code", ""),
+            "meta": meta,
+            "upcoming": upcoming[:8],
+            "recent": recent[:6],
+            "news": news[:5],
+            "total": len(comm_hearings),
+        })
+
+    return sections
 
 # ── Social / X Feed Pulling ───────────────────────────────────────────────────
 

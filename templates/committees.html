@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Committee On-goings{% endblock %}
+{% block page_title %}Committee On-goings{% endblock %}
+
+{% block header_actions %}
+  <div class="flex items-center gap-2">
+    <form method="post" action="{{ url_for('pull_committees') }}">
+      <input type="hidden" name="next" value="{{ url_for('committees_ongoings') }}"/>
+      <button type="submit"
+              class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Refresh all
+      </button>
+    </form>
+    <a href="{{ url_for('feeds_page') }}"
+       class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
+      RSS Feeds
+    </a>
+  </div>
+{% endblock %}
+
+{% block content %}
+
+<div class="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 mb-6 text-sm text-blue-900">
+  <p>
+    Committee profiles and jurisdiction come from
+    <a href="https://www.govtrack.us/" target="_blank" rel="noopener" class="font-medium underline">GovTrack.us</a>.
+    Upcoming Senate meetings use the
+    <a href="https://www.senate.gov/general/committee_schedules/hearings.xml" target="_blank" rel="noopener" class="font-medium underline">official Senate schedule XML</a>
+    (same source GovTrack cites).
+    House and cross-chamber items also come from Congress.gov API and committee RSS feeds.
+    <a href="{{ govtrack_about }}" target="_blank" rel="noopener" class="underline">About GovTrack data →</a>
+  </p>
+  {% if cache_updated %}
+    <p class="text-xs text-blue-700 mt-2">GovTrack metadata last refreshed: {{ cache_updated }}</p>
+  {% endif %}
+</div>
+
+<div class="grid grid-cols-2 gap-6 mb-4">
+  <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+    <p class="text-xs font-bold text-slate-500 uppercase tracking-wide">Tracked committees</p>
+    <p class="text-2xl font-bold text-slate-800 mt-1">{{ sections|length }}</p>
+  </div>
+  <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+    <p class="text-xs font-bold text-slate-500 uppercase tracking-wide">Upcoming meetings (next ~3 weeks)</p>
+    <p class="text-2xl font-bold text-blue-600 mt-1">{{ upcoming_total }}</p>
+  </div>
+</div>
+
+<div class="space-y-6">
+  {% for sec in sections %}
+  <section class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+    <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/80">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <h2 class="font-semibold text-slate-800">{{ sec.label }}</h2>
+          {% if sec.meta.jurisdiction %}
+            <p class="text-xs text-slate-600 mt-1.5 leading-relaxed line-clamp-3">{{ sec.meta.jurisdiction }}</p>
+          {% endif %}
+        </div>
+        <div class="flex flex-wrap gap-2 text-xs">
+          {% if sec.meta.govtrack_url %}
+            <a href="{{ sec.meta.govtrack_url }}" target="_blank" rel="noopener"
+               class="px-2.5 py-1 rounded-full bg-rose-50 text-rose-800 border border-rose-200 font-medium hover:bg-rose-100">
+              GovTrack
+            </a>
+          {% endif %}
+          {% if sec.meta.official_url %}
+            <a href="{{ sec.meta.official_url }}" target="_blank" rel="noopener"
+               class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 font-medium hover:bg-slate-200">
+              Committee site
+            </a>
+          {% endif %}
+          <a href="{{ url_for('hearings_list', committee=sec.label) }}"
+             class="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-medium hover:bg-blue-100">
+            All {{ sec.total }} tracked
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+      <!-- Upcoming -->
+      <div class="p-5">
+        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Upcoming</h3>
+        {% if sec.upcoming %}
+          <ul class="space-y-3">
+            {% for h in sec.upcoming %}
+              {% set da = days_away(h.date) %}
+              <li>
+                <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
+                  <p class="text-sm font-medium text-slate-800 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
+                  <p class="text-xs text-slate-500 mt-0.5">
+                    {{ h.date }}
+                    {% if h.get('source') %} · {{ h.source }}{% endif %}
+                    {% if da is not none and da >= 0 %} · in {{ da }}d{% endif %}
+                  </p>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-xs text-slate-400">No upcoming meetings in the next few weeks.</p>
+        {% endif %}
+      </div>
+
+      <!-- Recent activity -->
+      <div class="p-5">
+        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Recent (14 days)</h3>
+        {% if sec.recent %}
+          <ul class="space-y-3">
+            {% for h in sec.recent %}
+              <li>
+                <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
+                  <p class="text-sm text-slate-700 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
+                  <span class="inline-block mt-1 text-xs px-1.5 py-0.5 rounded {{ status_cls(h.status) }}">{{ h.status }}</span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-xs text-slate-400">Nothing recent for this committee.</p>
+        {% endif %}
+      </div>
+
+      <!-- RSS / news -->
+      <div class="p-5">
+        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Committee news (RSS)</h3>
+        {% if sec.news %}
+          <ul class="space-y-3">
+            {% for h in sec.news %}
+              <li>
+                {% if h.url %}
+                  <a href="{{ h.url }}" target="_blank" rel="noopener" class="block group">
+                    <p class="text-sm text-slate-700 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
+                    <p class="text-xs text-slate-400 mt-0.5">{{ h.date }}</p>
+                  </a>
+                {% else %}
+                  <p class="text-sm text-slate-700 line-clamp-2">{{ h.topic }}</p>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-xs text-slate-400">No recent RSS items — check <a href="{{ url_for('feeds_page') }}" class="text-blue-600 underline">RSS Feeds</a>.</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+
+{% endblock %}

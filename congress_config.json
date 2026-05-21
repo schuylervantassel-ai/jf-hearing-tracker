@@ -3,15 +3,17 @@
   "api_base": "https://api.congress.gov/v3",
   "meetings_limit_per_committee": 20,
   "chambers": ["house", "senate"],
+  "senate_schedule_url": "https://www.senate.gov/general/committee_schedules/hearings.xml",
+  "govtrack_api_base": "https://www.govtrack.us/api/v2",
   "committees": [
-    {"system_code": "ssas00", "label": "Senate Armed Services (SASC)", "chamber": "senate"},
-    {"system_code": "ssfr00", "label": "Senate Foreign Relations (SFRC)", "chamber": "senate"},
-    {"system_code": "slin00", "label": "Senate Intelligence (SSCI)", "chamber": "senate"},
-    {"system_code": "ssga00", "label": "Senate Homeland Security (SHSGAC)", "chamber": "senate"},
-    {"system_code": "hsas00", "label": "House Armed Services (HASC)", "chamber": "house"},
-    {"system_code": "hsfa00", "label": "House Foreign Affairs (HFAC)", "chamber": "house"},
-    {"system_code": "hlig00", "label": "House Intelligence (HPSCI)", "chamber": "house"},
-    {"system_code": "hshm00", "label": "House Homeland Security (HHSC)", "chamber": "house"}
+    {"system_code": "ssas00", "govtrack_code": "SSAS", "label": "Senate Armed Services (SASC)", "chamber": "senate"},
+    {"system_code": "ssfr00", "govtrack_code": "SSFR", "label": "Senate Foreign Relations (SFRC)", "chamber": "senate"},
+    {"system_code": "slin00", "govtrack_code": "SLIN", "label": "Senate Intelligence (SSCI)", "chamber": "senate"},
+    {"system_code": "ssga00", "govtrack_code": "SSGA", "label": "Senate Homeland Security (SHSGAC)", "chamber": "senate"},
+    {"system_code": "hsas00", "govtrack_code": "HSAS", "label": "House Armed Services (HASC)", "chamber": "house"},
+    {"system_code": "hsfa00", "govtrack_code": "HSFA", "label": "House Foreign Affairs (HFAC)", "chamber": "house"},
+    {"system_code": "hlig00", "govtrack_code": "HLIG", "label": "House Intelligence (HPSCI)", "chamber": "house"},
+    {"system_code": "hshm00", "govtrack_code": "HSHM", "label": "House Homeland Security (HHSC)", "chamber": "house"}
   ],
   "endpoints": {
     "house_meetings": "https://api.congress.gov/v3/committee-meeting/119/house",

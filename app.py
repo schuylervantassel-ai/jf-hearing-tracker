@@ -58,6 +58,7 @@ def _seed_persistent_data() -> None:
         "social_feed.json",
         "congress_api.json",
         "congress_config.json",
+        "govtrack_committees.json",
         "fr_watchlist.json",
         "fr_documents.json",
     ):
@@ -78,6 +79,8 @@ from comit import (
     load_fr_documents, save_fr_documents, load_fr_watchlist, save_fr_watchlist,
     pull_federal_register, fr_comment_period_label, FR_WORKFLOW_STATUSES,
     load_congress_config,
+    pull_senate_schedule, refresh_govtrack_committee_cache,
+    build_committee_ongoings, load_govtrack_cache,
 )
 import json as _json
 
@@ -515,18 +518,22 @@ def _save_api_key(key):
 
 
 def _run_full_feed_import():
-    """RSS + Congress.gov API + social feeds (same as “Pull All Feeds”)."""
+    """RSS + Senate schedule + Congress.gov API + GovTrack cache + social."""
     hearings = load_data()
     feeds = load_feeds()
     social_feeds = load_social_feeds()
     new_rss = pull_rss_feeds(hearings, feeds, silent=True)
+    sched = pull_senate_schedule(hearings, silent=True)
+    refresh_govtrack_committee_cache(silent=True)
     api_key = _load_api_key()
     api_result = (
         pull_congress_api(hearings, api_key, silent=True) if api_key else {"new": [], "updated": 0}
     )
     new_api = api_result.get("new", [])
     new_social = pull_social_feeds(social_feeds, silent=True)
-    return new_rss, new_api, new_social, api_result.get("updated", 0)
+    sched_new = len(sched.get("new", []))
+    sched_upd = sched.get("updated", 0)
+    return new_rss, new_api, new_social, api_result.get("updated", 0), sched_new, sched_upd
 
 
 def _auto_feed_poll_loop():
@@ -547,7 +554,7 @@ def _auto_feed_poll_loop():
             continue
         try:
             with DATA_LOCK:
-                new_rss, new_api, new_social, api_upd = _run_full_feed_import()
+                new_rss, new_api, new_social, api_upd, sched_n, sched_u = _run_full_feed_import()
             nr, na, ns = len(new_rss), len(new_api), len(new_social)
             _last_pull["ts"] = datetime.now(timezone.utc).isoformat()
             _last_pull["new_rss"] = nr
@@ -595,14 +602,18 @@ def feeds_page():
 def pull_feeds():
     try:
         with DATA_LOCK:
-            new_rss, new_api, new_social, api_upd = _run_full_feed_import()
+            new_rss, new_api, new_social, api_upd, sched_n, sched_u = _run_full_feed_import()
     except Exception as e:
         flash(f"Feed pull failed: {e}", "error")
         return redirect(url_for("feeds_page"))
-    total        = len(new_rss) + len(new_api)
+    total        = len(new_rss) + len(new_api) + sched_n
     parts        = []
     if new_rss:
         parts.append(f"{len(new_rss)} from RSS")
+    if sched_n:
+        parts.append(f"{sched_n} from Senate schedule")
+    if sched_u:
+        parts.append(f"{sched_u} schedule updates")
     if new_api:
         parts.append(f"{len(new_api)} new from Congress.gov API")
     if api_upd:
@@ -701,6 +712,55 @@ def add_feed():
         save_feeds(feeds)
     flash(f"Feed '{request.form['name']}' added.", "success")
     return redirect(url_for("feeds_page"))
+
+
+@app.route("/committees")
+def committees_ongoings():
+    hearings = load_data()
+    cache = load_govtrack_cache()
+    sections = build_committee_ongoings(hearings, cache)
+    upcoming_total = sum(len(s["upcoming"]) for s in sections)
+    return render_template(
+        "committees.html",
+        sections=sections,
+        cache_updated=cache.get("updated"),
+        upcoming_total=upcoming_total,
+        govtrack_about="https://www.govtrack.us/about-our-data",
+    )
+
+
+@app.route("/committees/pull", methods=["POST"])
+def pull_committees():
+    redirect_to = request.form.get("next") or url_for("committees_ongoings")
+    try:
+        with DATA_LOCK:
+            hearings = load_data()
+            feeds = load_feeds()
+            new_rss = pull_rss_feeds(hearings, feeds, silent=True)
+            sched = pull_senate_schedule(hearings, silent=True)
+            refresh_govtrack_committee_cache(silent=True)
+            api_key = _load_api_key()
+            api_result = (
+                pull_congress_api(hearings, api_key, silent=True)
+                if api_key else {"new": [], "updated": 0}
+            )
+    except Exception as e:
+        flash(f"Refresh failed: {e}", "error")
+        return redirect(redirect_to)
+    parts = []
+    if new_rss:
+        parts.append(f"{len(new_rss)} RSS")
+    if sched.get("new"):
+        parts.append(f"{len(sched['new'])} schedule")
+    if sched.get("updated"):
+        parts.append(f"{sched['updated']} schedule updates")
+    if api_result.get("new"):
+        parts.append(f"{len(api_result['new'])} API")
+    if api_result.get("updated"):
+        parts.append(f"{api_result['updated']} API updates")
+    msg = "Committee data refreshed" + (f" ({', '.join(parts)})" if parts else " (no new items)")
+    flash(msg, "success")
+    return redirect(redirect_to)
 
 
 @app.route("/activity")
