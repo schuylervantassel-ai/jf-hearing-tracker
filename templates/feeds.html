@@ -248,7 +248,31 @@
 
   function applyStatus(data) {
     if (label) {
-      label.textContent = data.ts ? ('Last synced: ' + fmtAgo(data.ts)) : 'Last synced: —';
+      if (data.in_progress) {
+        label.textContent = 'Syncing feeds…';
+        label.classList.add('text-blue-600', 'font-medium');
+      } else {
+        label.classList.remove('text-blue-600', 'font-medium');
+        label.textContent = data.ts ? ('Last synced: ' + fmtAgo(data.ts)) : 'Last synced: —';
+      }
+    }
+    if (data.in_progress) {
+      if (banner) {
+        banner.textContent = 'Feed refresh in progress — the site stays available; this page updates when done.';
+        banner.classList.remove('hidden', 'bg-emerald-50/90', 'border-emerald-100', 'text-emerald-900');
+        banner.classList.add('bg-blue-50/90', 'border-blue-100', 'text-blue-900');
+      }
+      return;
+    }
+    if (banner) {
+      banner.classList.remove('bg-blue-50/90', 'border-blue-100', 'text-blue-900');
+      banner.classList.add('bg-emerald-50/90', 'border-emerald-100', 'text-emerald-900');
+    }
+    if (data.message && !data.error) {
+      if (banner) {
+        banner.textContent = data.message;
+        banner.classList.remove('hidden');
+      }
     }
     if (
       banner &&
@@ -264,12 +288,20 @@
   function poll() {
     fetch('{{ url_for("poll_status") }}')
       .then(function (r) { return r.json(); })
-      .then(applyStatus)
-      .catch(function () {});
+      .then(function (data) {
+        applyStatus(data);
+        return data.in_progress;
+      })
+      .catch(function () { return false; });
   }
 
-  poll();
-  setInterval(poll, 60000);
+  function schedulePoll() {
+    poll().then(function (busy) {
+      setTimeout(schedulePoll, busy ? 5000 : 60000);
+    });
+  }
+
+  schedulePoll();
 })();
 </script>
 

@@ -25,7 +25,16 @@ RSS_AUTO_PULL_INITIAL_DELAY_SEC = max(0, int(os.environ.get("RSS_AUTO_PULL_INITI
 FR_AUTO_PULL_ENABLED = _env_truthy("FR_AUTO_PULL", "0")
 FR_PULL_INTERVAL_MIN = max(60, int(os.environ.get("FR_PULL_INTERVAL_MINUTES", "360")))
 DATA_LOCK = threading.Lock()
-_last_pull: dict = {"ts": None, "new_rss": 0, "new_api": 0, "new_social": 0}
+_last_pull: dict = {
+    "ts": None,
+    "new_rss": 0,
+    "new_api": 0,
+    "new_social": 0,
+    "api_updated": 0,
+    "in_progress": False,
+    "error": None,
+    "message": None,
+}
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, url_for
 
@@ -520,24 +529,83 @@ def _save_api_key(key):
         _json.dump({"api_key": key}, f)
 
 
-def _run_full_feed_import():
-    """RSS + Senate schedule + Congress.gov API + GovTrack cache + social."""
+def _run_hearing_feed_import():
+    """
+    RSS + Senate hearing schedule + Congress.gov API + social.
+    Kept separate from session-calendar / GovTrack pulls (those are slow).
+    """
     hearings = load_data()
     feeds = load_feeds()
     social_feeds = load_social_feeds()
     new_rss = pull_rss_feeds(hearings, feeds, silent=True)
     sched = pull_senate_schedule(hearings, silent=True)
-    pull_session_calendar(silent=True)
-    refresh_govtrack_committee_cache(silent=True)
     api_key = _load_api_key()
     api_result = (
-        pull_congress_api(hearings, api_key, silent=True) if api_key else {"new": [], "updated": 0}
+        pull_congress_api(hearings, api_key, silent=True)
+        if api_key
+        else {"new": [], "updated": 0}
     )
     new_api = api_result.get("new", [])
     new_social = pull_social_feeds(social_feeds, silent=True)
-    sched_new = len(sched.get("new", []))
-    sched_upd = sched.get("updated", 0)
-    return new_rss, new_api, new_social, api_result.get("updated", 0), sched_new, sched_upd
+    return {
+        "new_rss": new_rss,
+        "new_api": new_api,
+        "new_social": new_social,
+        "api_updated": api_result.get("updated", 0),
+        "sched_new": len(sched.get("new", [])),
+        "sched_upd": sched.get("updated", 0),
+    }
+
+
+def _format_feed_pull_message(result):
+    parts = []
+    if result.get("new_rss"):
+        parts.append(f"{len(result['new_rss'])} RSS")
+    if result.get("sched_new"):
+        parts.append(f"{result['sched_new']} Senate schedule")
+    if result.get("sched_upd"):
+        parts.append(f"{result['sched_upd']} schedule updates")
+    if result.get("new_api"):
+        parts.append(f"{len(result['new_api'])} Congress.gov")
+    if result.get("api_updated"):
+        parts.append(f"{result['api_updated']} API updates")
+    if result.get("new_social"):
+        parts.append(f"{len(result['new_social'])} social")
+    if parts:
+        return "Feed refresh finished: " + ", ".join(parts) + "."
+    return "Feed refresh finished (no new items)."
+
+
+def _feed_pull_worker():
+    """Background job — must not block the Gunicorn worker."""
+    try:
+        with DATA_LOCK:
+            result = _run_hearing_feed_import()
+        _last_pull["ts"] = datetime.now(timezone.utc).isoformat()
+        _last_pull["new_rss"] = len(result["new_rss"])
+        _last_pull["new_api"] = len(result["new_api"])
+        _last_pull["new_social"] = len(result["new_social"])
+        _last_pull["api_updated"] = result["api_updated"]
+        _last_pull["error"] = None
+        _last_pull["message"] = _format_feed_pull_message(result)
+        print(f"[feed-pull] {_last_pull['message']}", flush=True)
+    except Exception as e:
+        _last_pull["error"] = str(e)
+        _last_pull["message"] = f"Feed refresh failed: {e}"
+        print(f"[feed-pull] {e}", file=sys.stderr, flush=True)
+    finally:
+        _last_pull["in_progress"] = False
+
+
+def _start_background_feed_pull():
+    """Return False if a pull is already running."""
+    if _last_pull.get("in_progress"):
+        return False
+    _last_pull["in_progress"] = True
+    _last_pull["error"] = None
+    _last_pull["message"] = None
+    threading.Thread(target=_feed_pull_worker, name="FeedPull", daemon=True).start()
+    return True
 
 
 def _auto_feed_poll_loop():
@@ -556,21 +624,8 @@ def _auto_feed_poll_loop():
         time.sleep(wait)
         if not RSS_AUTO_PULL_ENABLED:
             continue
-        try:
-            with DATA_LOCK:
-                new_rss, new_api, new_social, api_upd, sched_n, sched_u = _run_full_feed_import()
-            nr, na, ns = len(new_rss), len(new_api), len(new_social)
-            _last_pull["ts"] = datetime.now(timezone.utc).isoformat()
-            _last_pull["new_rss"] = nr
-            _last_pull["new_api"] = na
-            _last_pull["new_social"] = ns
-            if nr or na or ns:
-                print(
-                    f"[RSS auto-pull] +{nr} RSS, +{na} API, +{ns} social",
-                    flush=True,
-                )
-        except Exception as e:
-            print(f"[RSS auto-pull] {e}", file=sys.stderr, flush=True)
+        if not _start_background_feed_pull():
+            print("[RSS auto-pull] skipped (pull already in progress)", flush=True)
 
 
 def _start_auto_feed_poller():
@@ -584,6 +639,15 @@ def _start_auto_feed_poller():
 @app.route("/api/poll-status")
 def poll_status():
     return jsonify(_last_pull)
+
+
+def _flash_pull_started(redirect_url):
+    flash(
+        "Feed refresh started in the background (usually 1–2 minutes). "
+        "You can keep using the site; check back shortly.",
+        "info",
+    )
+    return redirect(redirect_url)
 
 
 @app.route("/feeds")
@@ -604,31 +668,10 @@ def feeds_page():
 
 @app.route("/feeds/pull", methods=["POST"])
 def pull_feeds():
-    try:
-        with DATA_LOCK:
-            new_rss, new_api, new_social, api_upd, sched_n, sched_u = _run_full_feed_import()
-    except Exception as e:
-        flash(f"Feed pull failed: {e}", "error")
+    if not _start_background_feed_pull():
+        flash("A feed refresh is already running. Please wait a minute.", "error")
         return redirect(url_for("feeds_page"))
-    total        = len(new_rss) + len(new_api) + sched_n
-    parts        = []
-    if new_rss:
-        parts.append(f"{len(new_rss)} from RSS")
-    if sched_n:
-        parts.append(f"{sched_n} from Senate schedule")
-    if sched_u:
-        parts.append(f"{sched_u} schedule updates")
-    if new_api:
-        parts.append(f"{len(new_api)} new from Congress.gov API")
-    if api_upd:
-        parts.append(f"{api_upd} updated from Congress.gov API")
-    msg = f"{total} new hearing(s) imported" + (f" ({', '.join(parts)})" if parts else "") + "."
-    if api_upd and not new_api and not new_rss:
-        msg = f"{api_upd} hearing(s) updated from Congress.gov API."
-    if new_social:
-        msg += f" {len(new_social)} new social post(s) added."
-    flash(msg, "success")
-    return redirect(url_for("feeds_page"))
+    return _flash_pull_started(url_for("feeds_page"))
 
 
 @app.route("/feeds/pull-api", methods=["POST"])
@@ -637,25 +680,37 @@ def pull_api_only():
     if not api_key:
         flash("Add your Congress.gov API key first.", "error")
         return redirect(url_for("feeds_page"))
-    try:
-        with DATA_LOCK:
-            hearings = load_data()
-            result = pull_congress_api(hearings, api_key, silent=True)
-    except Exception as e:
-        flash(f"Congress.gov pull failed: {e}", "error")
+    if _last_pull.get("in_progress"):
+        flash("A feed refresh is already running. Please wait.", "error")
         return redirect(url_for("feeds_page"))
-    new_n = len(result.get("new", []))
-    upd_n = result.get("updated", 0)
-    if new_n and upd_n:
-        msg = f"Congress.gov: {new_n} new, {upd_n} updated."
-    elif new_n:
-        msg = f"{new_n} new hearing(s) from Congress.gov API."
-    elif upd_n:
-        msg = f"{upd_n} hearing(s) updated from Congress.gov API."
-    else:
-        msg = "Congress.gov: no new or updated hearings (API may lack dates for some meetings)."
-    flash(msg, "success")
-    return redirect(url_for("feeds_page"))
+
+    def _api_worker():
+        try:
+            with DATA_LOCK:
+                hearings = load_data()
+                result = pull_congress_api(hearings, api_key, silent=True)
+            _last_pull["ts"] = datetime.now(timezone.utc).isoformat()
+            _last_pull["new_api"] = len(result.get("new", []))
+            _last_pull["api_updated"] = result.get("updated", 0)
+            _last_pull["error"] = None
+            new_n, upd_n = _last_pull["new_api"], _last_pull["api_updated"]
+            if new_n and upd_n:
+                _last_pull["message"] = f"Congress.gov: {new_n} new, {upd_n} updated."
+            elif new_n:
+                _last_pull["message"] = f"{new_n} new from Congress.gov API."
+            elif upd_n:
+                _last_pull["message"] = f"{upd_n} updated from Congress.gov API."
+            else:
+                _last_pull["message"] = "Congress.gov: no new or updated hearings."
+        except Exception as e:
+            _last_pull["error"] = str(e)
+            _last_pull["message"] = str(e)
+        finally:
+            _last_pull["in_progress"] = False
+
+    _last_pull["in_progress"] = True
+    threading.Thread(target=_api_worker, name="CongressApiPull", daemon=True).start()
+    return _flash_pull_started(url_for("feeds_page"))
 
 
 @app.route("/feeds/api-key", methods=["POST"])
@@ -765,20 +820,32 @@ def pull_calendar():
         redirect_to = request.form.get("next") or url_for(
             "chamber_calendar", view="week", week=week
         )
-    try:
-        with DATA_LOCK:
-            pull_session_calendar(silent=True)
-    except Exception as e:
-        flash(f"Calendar refresh failed: {e}", "error")
+    if _last_pull.get("in_progress"):
+        flash("Another refresh is running. Please wait.", "error")
         return redirect(redirect_to)
-    cache = load_chamber_calendar()
-    n_house = len(cache.get("house_days") or {})
-    n_senate = len(cache.get("senate_recess") or [])
-    flash(
-        f"Session calendar updated — House: {n_house} day(s) marked, "
-        f"Senate: {n_senate} recess period(s) loaded.",
-        "success",
-    )
+
+    def _cal_worker():
+        try:
+            with DATA_LOCK:
+                pull_session_calendar(silent=True)
+            cache = load_chamber_calendar()
+            n_house = len(cache.get("house_days") or {})
+            n_senate = len(cache.get("senate_recess") or [])
+            _last_pull["ts"] = datetime.now(timezone.utc).isoformat()
+            _last_pull["error"] = None
+            _last_pull["message"] = (
+                f"Session calendar updated — House: {n_house} days, "
+                f"Senate: {n_senate} recess periods."
+            )
+        except Exception as e:
+            _last_pull["error"] = str(e)
+            _last_pull["message"] = str(e)
+        finally:
+            _last_pull["in_progress"] = False
+
+    _last_pull["in_progress"] = True
+    threading.Thread(target=_cal_worker, name="SessionCalPull", daemon=True).start()
+    flash("Session calendar refresh started in the background (~30 seconds).", "info")
     return redirect(redirect_to)
 
 
@@ -800,36 +867,21 @@ def committees_ongoings():
 @app.route("/committees/pull", methods=["POST"])
 def pull_committees():
     redirect_to = request.form.get("next") or url_for("committees_ongoings")
-    try:
-        with DATA_LOCK:
-            hearings = load_data()
-            feeds = load_feeds()
-            new_rss = pull_rss_feeds(hearings, feeds, silent=True)
-            sched = pull_senate_schedule(hearings, silent=True)
-            pull_session_calendar(silent=True)
-            refresh_govtrack_committee_cache(silent=True)
-            api_key = _load_api_key()
-            api_result = (
-                pull_congress_api(hearings, api_key, silent=True)
-                if api_key else {"new": [], "updated": 0}
-            )
-    except Exception as e:
-        flash(f"Refresh failed: {e}", "error")
+    if not _start_background_feed_pull():
+        flash("A refresh is already running. Please wait.", "error")
         return redirect(redirect_to)
-    parts = []
-    if new_rss:
-        parts.append(f"{len(new_rss)} RSS")
-    if sched.get("new"):
-        parts.append(f"{len(sched['new'])} schedule")
-    if sched.get("updated"):
-        parts.append(f"{sched['updated']} schedule updates")
-    if api_result.get("new"):
-        parts.append(f"{len(api_result['new'])} API")
-    if api_result.get("updated"):
-        parts.append(f"{api_result['updated']} API updates")
-    msg = "Committee data refreshed" + (f" ({', '.join(parts)})" if parts else " (no new items)")
-    flash(msg, "success")
-    return redirect(redirect_to)
+
+    def _committee_meta_worker():
+        try:
+            with DATA_LOCK:
+                refresh_govtrack_committee_cache(silent=True)
+        except Exception as e:
+            print(f"[govtrack-cache] {e}", file=sys.stderr, flush=True)
+
+    threading.Thread(
+        target=_committee_meta_worker, name="GovTrackCache", daemon=True
+    ).start()
+    return _flash_pull_started(redirect_to)
 
 
 @app.route("/activity")
@@ -856,6 +908,9 @@ def activity():
 
 @app.route("/activity/pull", methods=["POST"])
 def pull_activity():
+    if _last_pull.get("in_progress"):
+        flash("A feed refresh is already running. Please wait.", "error")
+        return redirect(url_for("activity"))
     with DATA_LOCK:
         feeds     = load_social_feeds()
         new_items = pull_social_feeds(feeds, silent=True)

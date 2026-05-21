@@ -250,8 +250,11 @@ def load_data():
     return []
 
 def save_data(hearings):
-    with open(DATA_FILE, "w") as f:
+    """Atomic write so readers never see a half-written hearings.json."""
+    tmp = DATA_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(hearings, f, indent=2)
+    os.replace(tmp, DATA_FILE)
 
 def load_feeds():
     if os.path.exists(CONFIG_FILE):
@@ -898,7 +901,11 @@ def _parse_house_session_calendar(year, silent=False):
     except Exception as e:
         errors.append(f"main: {e}")
 
-    for month in range(1, 13):
+    # Monthly URLs only needed if main page lacks that month (House shows ~3 months).
+    months_missing = [m for m in range(1, 13) if not any(
+        d.startswith(f"{year}-{m:02d}") for d in all_days
+    )]
+    for month in months_missing:
         url = HOUSE_SESSION_PAGE.format(year=year, month=month)
         if not silent:
             print(f"    House {year}-{month:02d} ... ", end="", flush=True)
@@ -908,7 +915,7 @@ def _parse_house_session_calendar(year, silent=False):
             all_days.update(days)
             if not silent:
                 print(f"{len(days)} days")
-            time.sleep(0.2)
+            time.sleep(0.15)
         except Exception as e:
             errors.append(f"{month:02d}: {e}")
             if not silent:
@@ -1466,7 +1473,7 @@ def pull_congress_api(hearings, api_key, silent=False):
                     continue
 
                 try:
-                    time.sleep(0.12)
+                    time.sleep(0.08)
                     detail = fetch_json(detail_url, api_key)
                     meeting = detail.get("committeeMeeting", {})
                 except Exception:
