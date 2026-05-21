@@ -59,6 +59,7 @@ def _seed_persistent_data() -> None:
         "congress_api.json",
         "congress_config.json",
         "govtrack_committees.json",
+        "chamber_calendar.json",
         "fr_watchlist.json",
         "fr_documents.json",
     ):
@@ -81,6 +82,7 @@ from comit import (
     load_congress_config,
     pull_senate_schedule, refresh_govtrack_committee_cache,
     build_committee_ongoings, load_govtrack_cache,
+    pull_chamber_calendars, build_calendar_week, load_chamber_calendar,
 )
 import json as _json
 
@@ -524,6 +526,7 @@ def _run_full_feed_import():
     social_feeds = load_social_feeds()
     new_rss = pull_rss_feeds(hearings, feeds, silent=True)
     sched = pull_senate_schedule(hearings, silent=True)
+    pull_chamber_calendars(silent=True)
     refresh_govtrack_committee_cache(silent=True)
     api_key = _load_api_key()
     api_result = (
@@ -714,6 +717,50 @@ def add_feed():
     return redirect(url_for("feeds_page"))
 
 
+@app.route("/calendar")
+def chamber_calendar():
+    week = request.args.get("week", "")
+    tracked_only = request.args.get("tracked") == "1"
+    cache = load_chamber_calendar()
+    cal = build_calendar_week(
+        week_start=week or None,
+        events=cache.get("events"),
+        tracked_only=tracked_only,
+    )
+    return render_template(
+        "calendar.html",
+        cal=cal,
+        tracked_only=tracked_only,
+        cache_updated=cache.get("updated"),
+        official_links={
+            "congress": "https://www.congress.gov/committee-schedule/",
+            "senate_committees": "https://www.senate.gov/committees/hearings.htm",
+            "house_calendar": "https://docs.house.gov/Committee/Calendar/",
+            "senate_floor": "https://www.senate.gov/legislative/schedule/weekly.htm",
+            "house_floor": "https://www.house.gov/legislative-activity",
+        },
+    )
+
+
+@app.route("/calendar/pull", methods=["POST"])
+def pull_calendar():
+    redirect_to = request.form.get("next") or url_for(
+        "chamber_calendar", week=request.form.get("week", "")
+    )
+    try:
+        with DATA_LOCK:
+            hearings = load_data()
+            pull_chamber_calendars(silent=True)
+            pull_senate_schedule(hearings, silent=True)
+    except Exception as e:
+        flash(f"Calendar refresh failed: {e}", "error")
+        return redirect(redirect_to)
+    cache = load_chamber_calendar()
+    n = len(cache.get("events") or [])
+    flash(f"Calendar refreshed — {n} meeting(s) from House & Senate schedules.", "success")
+    return redirect(redirect_to)
+
+
 @app.route("/committees")
 def committees_ongoings():
     hearings = load_data()
@@ -738,6 +785,7 @@ def pull_committees():
             feeds = load_feeds()
             new_rss = pull_rss_feeds(hearings, feeds, silent=True)
             sched = pull_senate_schedule(hearings, silent=True)
+            cal = pull_chamber_calendars(silent=True)
             refresh_govtrack_committee_cache(silent=True)
             api_key = _load_api_key()
             api_result = (
@@ -750,6 +798,8 @@ def pull_committees():
     parts = []
     if new_rss:
         parts.append(f"{len(new_rss)} RSS")
+    if cal.get("events"):
+        parts.append(f"{len(cal['events'])} calendar")
     if sched.get("new"):
         parts.append(f"{len(sched['new'])} schedule")
     if sched.get("updated"):

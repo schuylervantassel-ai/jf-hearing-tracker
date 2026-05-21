@@ -38,7 +38,9 @@ def _data_path(filename: str) -> str:
 DATA_FILE    = _data_path("hearings.json")
 CONFIG_FILE  = _data_path("rss_config.json")
 GOVTRACK_CACHE_FILE = _data_path("govtrack_committees.json")
+CALENDAR_CACHE_FILE = _data_path("chamber_calendar.json")
 SOCIAL_FILE  = _data_path("social_feed.json")
+HOUSE_CALENDAR_BASE = "https://docs.house.gov/Committee/Calendar"
 SENATE_SCHEDULE_URL = "https://www.senate.gov/general/committee_schedules/hearings.xml"
 GOVTRACK_API_BASE = "https://www.govtrack.us/api/v2"
 SOCIAL_LIMIT = 500   # max items to keep across all social feeds
@@ -769,6 +771,245 @@ def pull_senate_schedule(hearings, silent=False):
     if not silent:
         print(f"{len(new_items)} new, {updated} updated")
     return {"new": new_items, "updated": updated}
+
+
+# ── House / Senate week calendar (official schedules) ─────────────────────────
+
+_HOUSE_COMMITTEE_PATTERNS = [
+    ("armed services", "House Armed Services (HASC)"),
+    ("foreign affairs", "House Foreign Affairs (HFAC)"),
+    ("permanent select committee on intelligence", "House Intelligence (HPSCI)"),
+    ("intelligence", "House Intelligence (HPSCI)"),
+    ("homeland security", "House Homeland Security (HHSC)"),
+]
+
+
+def _fetch_url_bytes(url, timeout=15):
+    headers = {"User-Agent": "Mozilla/5.0 (Jamestown Foundation Hearing Tracker)"}
+    req = Request(url, headers=headers)
+    ctx = _make_ssl_context()
+    with urlopen(req, timeout=timeout, context=ctx) as resp:
+        return resp.read()
+
+
+def _day_id_from_date(d):
+    """date → MMDDYYYY for docs.house.gov."""
+    return d.strftime("%m%d%Y")
+
+
+def _date_from_day_id(day_id):
+    m = re.match(r"^(\d{2})(\d{2})(\d{4})$", (day_id or "").strip())
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+    except ValueError:
+        return None
+
+
+def _match_house_committee_label(committee_raw):
+    text = (committee_raw or "").lower()
+    for needle, label in _HOUSE_COMMITTEE_PATTERNS:
+        if needle in text:
+            return label
+    return None
+
+
+def _parse_house_day_html(html, meeting_date):
+    """Parse docs.house.gov ByDay.aspx table into calendar events."""
+    events = []
+    for chunk in html.split("<tr>")[2:]:
+        m_eid = re.search(r"EventID=(\d+)", chunk)
+        if not m_eid:
+            continue
+        m_title = re.search(r'title="([^"]*)"', chunk)
+        m_comm = re.search(r'<span class="text-tiny" title="([^"]*)"', chunk)
+        tds = re.findall(r"<td[^>]*>(.*?)</td>", chunk, re.DOTALL)
+        time_str = re.sub(r"<[^>]+>", "", tds[1]).strip() if len(tds) > 1 else ""
+        room = re.sub(r"<[^>]+>", "", tds[2]).strip() if len(tds) > 2 else ""
+        title = clean_html(m_title.group(1) if m_title else "")
+        committee_raw = clean_html(m_comm.group(1) if m_comm else "")
+        if not title:
+            continue
+        eid = m_eid.group(1)
+        label = _match_house_committee_label(committee_raw)
+        events.append({
+            "id": f"house-{eid}",
+            "chamber": "house",
+            "date": meeting_date.isoformat(),
+            "time": time_str,
+            "title": title[:500],
+            "committee_raw": committee_raw,
+            "committee": label,
+            "tracked": bool(label),
+            "room": room,
+            "url": f"{HOUSE_CALENDAR_BASE}/ByEvent.aspx?EventID={eid}",
+            "source": "house_calendar",
+        })
+    return events
+
+
+def _parse_senate_schedule_events(root, code_map):
+    """All Senate committee meetings from hearings.xml (not only tracked)."""
+    cfg = load_congress_config()
+    congress = cfg["congress"]
+    events = []
+    for mtg in root.findall("meeting"):
+        cmte_code = (mtg.findtext("cmte_code") or "").lower()
+        committee_name = _committee_from_system_code(cmte_code, code_map)
+        event_id = (mtg.findtext("identifier") or "").strip()
+        matter = clean_html(mtg.findtext("matter") or "")
+        meeting_date = (mtg.findtext("date_iso_8601") or "")[:10]
+        if not meeting_date or not meeting_date[0].isdigit():
+            continue
+        if not matter and not event_id:
+            continue
+        sub = mtg.findtext("sub_cmte") or ""
+        committee_raw = mtg.findtext("committee") or ""
+        if sub:
+            committee_raw = f"{committee_raw} — {sub}" if committee_raw else sub
+        events.append({
+            "id": f"senate-{event_id}",
+            "chamber": "senate",
+            "date": meeting_date,
+            "time": (mtg.findtext("time") or "").strip(),
+            "title": (matter or "Senate committee meeting")[:500],
+            "committee_raw": committee_raw,
+            "committee": committee_name,
+            "tracked": bool(committee_name),
+            "room": (mtg.findtext("room") or "").strip(),
+            "url": (
+                f"https://www.congress.gov/committee-meeting/"
+                f"{congress}/senate/{event_id}"
+                if event_id else ""
+            ),
+            "source": "senate_calendar",
+        })
+    return events
+
+
+def load_chamber_calendar():
+    if os.path.exists(CALENDAR_CACHE_FILE):
+        with open(CALENDAR_CACHE_FILE) as f:
+            return json.load(f)
+    return {"updated": None, "events": []}
+
+
+def save_chamber_calendar(data):
+    with open(CALENDAR_CACHE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def pull_chamber_calendars(silent=False, days_back=1, days_ahead=21):
+    """
+    Refresh chamber_calendar.json from Senate XML and House ByDay pages.
+    """
+    cfg = load_congress_config()
+    code_map = cfg["committee_codes"]
+    events = []
+    errors = []
+
+    if not silent:
+        print("  Senate calendar (all committees) ... ", end="", flush=True)
+    try:
+        root = ET.fromstring(_fetch_senate_schedule_xml())
+        events.extend(_parse_senate_schedule_events(root, code_map))
+        if not silent:
+            print(f"{sum(1 for e in events if e['chamber']=='senate')} meetings")
+    except Exception as e:
+        errors.append(f"Senate: {e}")
+        if not silent:
+            print(f"FAILED ({e})")
+
+    if not silent:
+        print("  House calendar (docs.house.gov) ... ", end="", flush=True)
+    today = date.today()
+    house_count = 0
+    for offset in range(-days_back, days_ahead + 1):
+        d = today.fromordinal(today.toordinal() + offset)
+        day_id = _day_id_from_date(d)
+        url = f"{HOUSE_CALENDAR_BASE}/ByDay.aspx?DayID={day_id}"
+        try:
+            html = _fetch_url_bytes(url).decode("utf-8", errors="replace")
+            day_events = _parse_house_day_html(html, d)
+            events.extend(day_events)
+            house_count += len(day_events)
+            time.sleep(0.15)  # be polite to House servers
+        except Exception as e:
+            errors.append(f"House {day_id}: {e}")
+    if not silent:
+        print(f"{house_count} meetings")
+
+    # De-dupe by id
+    seen = set()
+    unique = []
+    for ev in events:
+        if ev["id"] in seen:
+            continue
+        seen.add(ev["id"])
+        unique.append(ev)
+
+    data = {
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "events": unique,
+        "errors": errors[:5],
+    }
+    save_chamber_calendar(data)
+    return data
+
+
+def _monday_of_week(d):
+    """Return Monday on or before date d."""
+    return d.fromordinal(d.toordinal() - d.weekday())
+
+
+def build_calendar_week(week_start=None, events=None, tracked_only=False):
+    """
+    Build 7-day grid for calendar UI.
+    week_start: ISO date string (Monday) or None for current week.
+    """
+    if events is None:
+        events = load_chamber_calendar().get("events") or []
+    if week_start:
+        try:
+            monday = date.fromisoformat(week_start)
+        except ValueError:
+            monday = _monday_of_week(date.today())
+    else:
+        monday = _monday_of_week(date.today())
+    monday = _monday_of_week(monday)
+
+    days = []
+    for i in range(7):
+        d = monday.fromordinal(monday.toordinal() + i)
+        iso = d.isoformat()
+        day_events = [e for e in events if e.get("date") == iso]
+        if tracked_only:
+            day_events = [e for e in day_events if e.get("tracked")]
+        day_events.sort(key=lambda e: (e.get("time") or "99:99", e.get("chamber", "")))
+        days.append({
+            "date": iso,
+            "weekday": d.strftime("%a"),
+            "label": d.strftime("%b %d"),
+            "is_today": d == date.today(),
+            "events": day_events,
+        })
+
+    prev_monday = monday.fromordinal(monday.toordinal() - 7).isoformat()
+    next_monday = monday.fromordinal(monday.toordinal() + 7).isoformat()
+    return {
+        "week_start": monday.isoformat(),
+        "week_end": monday.fromordinal(monday.toordinal() + 6).isoformat(),
+        "prev_week": prev_monday,
+        "next_week": next_monday,
+        "days": days,
+        "total_events": sum(len(d["events"]) for d in days),
+        "tracked_events": sum(
+            1 for e in events
+            if e.get("tracked") and monday.isoformat() <= e.get("date", "") <=
+            monday.fromordinal(monday.toordinal() + 6).isoformat()
+        ),
+    }
 
 
 def build_committee_ongoings(hearings, govtrack_cache=None):
