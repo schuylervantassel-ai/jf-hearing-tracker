@@ -1,21 +1,47 @@
 {% extends "base.html" %}
-{% block title %}Chamber Calendar{% endblock %}
-{% block page_title %}House & Senate Calendar{% endblock %}
+{% block title %}Session Calendar{% endblock %}
+{% block page_title %}House & Senate Session Calendar{% endblock %}
 
 {% block header_actions %}
   <div class="flex items-center gap-2 flex-wrap">
-    <a href="{{ url_for('chamber_calendar', week=cal.prev_week, tracked=('1' if tracked_only else '')) }}"
-       class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">← Prev week</a>
-    <a href="{{ url_for('chamber_calendar', tracked=('1' if tracked_only else '')) }}"
-       class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">This week</a>
-    <a href="{{ url_for('chamber_calendar', week=cal.next_week, tracked=('1' if tracked_only else '')) }}"
-       class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">Next week →</a>
+    {% if view == 'month' %}
+      <a href="{{ url_for('chamber_calendar', view='month', month=cal.prev_month) }}"
+         class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">← Prev month</a>
+      <a href="{{ url_for('chamber_calendar', view='month') }}"
+         class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">This month</a>
+      <a href="{{ url_for('chamber_calendar', view='month', month=cal.next_month) }}"
+         class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">Next month →</a>
+    {% else %}
+      <a href="{{ url_for('chamber_calendar', view='week', week=cal.prev_week) }}"
+         class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">← Prev week</a>
+      <a href="{{ url_for('chamber_calendar', view='week') }}"
+         class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">This week</a>
+      <a href="{{ url_for('chamber_calendar', view='week', week=cal.next_week) }}"
+         class="px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">Next week →</a>
+    {% endif %}
+
+    <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm font-medium">
+      <a href="{{ url_for('chamber_calendar', view='week', week=cal.week_start if view == 'week' else '') }}"
+         class="px-3 py-2 {% if view == 'week' %}bg-slate-800 text-white{% else %}bg-white text-slate-600 hover:bg-slate-50{% endif %}">
+        Week
+      </a>
+      <a href="{{ url_for('chamber_calendar', view='month', month=cal.year ~ '-' ~ ('%02d'|format(cal.month)) if view == 'month' else '') }}"
+         class="px-3 py-2 border-l border-slate-200 {% if view == 'month' %}bg-slate-800 text-white{% else %}bg-white text-slate-600 hover:bg-slate-50{% endif %}">
+        Month
+      </a>
+    </div>
+
     <form method="post" action="{{ url_for('pull_calendar') }}">
-      <input type="hidden" name="week" value="{{ cal.week_start }}"/>
-      <input type="hidden" name="next" value="{{ url_for('chamber_calendar', week=cal.week_start, tracked=('1' if tracked_only else '')) }}"/>
+      <input type="hidden" name="view" value="{{ view }}"/>
+      {% if view == 'week' %}
+        <input type="hidden" name="week" value="{{ cal.week_start }}"/>
+      {% else %}
+        <input type="hidden" name="month" value="{{ cal.year }}-{{ '%02d'|format(cal.month) }}"/>
+      {% endif %}
+      <input type="hidden" name="next" value="{{ request.url }}"/>
       <button type="submit"
               class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg shadow-sm">
-        Refresh calendar
+        Refresh
       </button>
     </form>
   </div>
@@ -25,95 +51,118 @@
 
 <div class="bg-slate-50 border border-slate-200 rounded-xl px-5 py-4 mb-5 text-sm text-slate-700">
   <p class="mb-2">
-    <strong>Week of {{ cal.week_start }}</strong> — {{ cal.total_events }} meeting(s) shown
-    {% if cache_updated %} · last refreshed {{ cache_updated }}{% endif %}
+    {% if view == 'month' %}
+      <strong>{{ cal.month_name }}</strong> — when each chamber expects to be in session
+    {% else %}
+      <strong>Week of {{ cal.week_start }}</strong> — when each chamber expects to be in session
+    {% endif %}
+    {% if cache_updated %} · updated {{ cache_updated }}{% endif %}
   </p>
   <p class="text-xs text-slate-500">
-    Senate data:
-    <a href="https://www.senate.gov/general/committee_schedules/hearings.xml" target="_blank" rel="noopener" class="underline">committee hearings XML</a>.
-    House data:
-    <a href="{{ official_links.house_calendar }}" target="_blank" rel="noopener" class="underline">docs.house.gov calendar</a>
-    (same sources
-    <a href="https://www.govtrack.us/about-our-data" target="_blank" rel="noopener" class="underline">GovTrack documents</a>).
+    <strong>House</strong> day-by-day status from
+    <a href="{{ official_links.house_schedule }}" target="_blank" rel="noopener" class="underline">house.gov legislative activity</a>.
+    <strong>Senate</strong> uses the
+    <a href="{{ official_links.senate_schedule }}" target="_blank" rel="noopener" class="underline">tentative annual schedule</a>
+    (recess periods published; weekdays outside those periods are shown as expected in session).
+    House.gov only publishes a few months at a time on its calendar; older months may show “No House data.”
+    Schedules change — confirm on official sites before travel or deadlines.
   </p>
-  <div class="flex flex-wrap gap-2 mt-3 text-xs">
-    <a href="{{ official_links.congress }}" target="_blank" rel="noopener"
-       class="px-2.5 py-1 rounded-full bg-white border border-slate-200 hover:border-blue-300">Congress.gov schedule</a>
-    <a href="{{ official_links.senate_committees }}" target="_blank" rel="noopener"
-       class="px-2.5 py-1 rounded-full bg-white border border-slate-200 hover:border-blue-300">Senate committees</a>
-    <a href="{{ official_links.house_calendar }}" target="_blank" rel="noopener"
-       class="px-2.5 py-1 rounded-full bg-white border border-slate-200 hover:border-blue-300">House calendar</a>
-    <a href="{{ official_links.senate_floor }}" target="_blank" rel="noopener"
-       class="px-2.5 py-1 rounded-full bg-white border border-slate-200 hover:border-blue-300">Senate floor (weekly)</a>
-    <a href="{{ official_links.house_floor }}" target="_blank" rel="noopener"
-       class="px-2.5 py-1 rounded-full bg-white border border-slate-200 hover:border-blue-300">House floor activity</a>
-    {% if tracked_only %}
-      <a href="{{ url_for('chamber_calendar', week=cal.week_start) }}"
-         class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200 font-medium">Showing tracked only — show all</a>
-    {% else %}
-      <a href="{{ url_for('chamber_calendar', week=cal.week_start, tracked='1') }}"
-         class="px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-medium">Filter: tracked committees only</a>
-    {% endif %}
-  </div>
 </div>
 
-<div class="grid grid-cols-7 gap-2 mb-2">
-  {% for day in cal.days %}
-  <div class="text-center text-xs font-bold uppercase tracking-wide py-2 rounded-lg
-              {% if day.is_today %}bg-blue-100 text-blue-800{% else %}text-slate-500{% endif %}">
-    {{ day.weekday }}<br><span class="font-normal normal-case">{{ day.label }}</span>
-  </div>
-  {% endfor %}
+<!-- Legend -->
+<div class="flex flex-wrap gap-3 mb-5 text-xs">
+  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium">
+    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> In session
+  </span>
+  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-medium">
+    <span class="w-2 h-2 rounded-full bg-slate-400"></span> Recess / out
+  </span>
+  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200 font-medium">
+    <span class="w-2 h-2 rounded-full bg-amber-500"></span> Holiday
+  </span>
+  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-50 text-slate-400 border border-slate-100 font-medium">
+    <span class="w-2 h-2 rounded-full bg-slate-300"></span> Unknown
+  </span>
+  <span class="text-slate-400 ml-2">Left bar = Senate · Right bar = House</span>
 </div>
 
-<div class="grid grid-cols-7 gap-2 min-h-[320px]">
+{% if view == 'week' %}
+<!-- Week view -->
+<div class="grid grid-cols-7 gap-3">
   {% for day in cal.days %}
-  <div class="bg-white rounded-xl border {% if day.is_today %}border-blue-300 ring-1 ring-blue-100{% else %}border-slate-200{% endif %} shadow-sm p-2 flex flex-col gap-2 min-h-[280px]">
-    {% if day.events %}
-      {% for ev in day.events %}
-      <div class="rounded-lg p-2 text-xs border-l-4
-                  {% if ev.chamber == 'senate' %}border-indigo-400 bg-indigo-50/80
-                  {% else %}border-emerald-500 bg-emerald-50/80{% endif %}
-                  {% if ev.tracked %}ring-1 ring-amber-300{% endif %}">
-        <div class="flex items-center gap-1 mb-0.5">
-          <span class="font-bold uppercase text-[10px]
-                       {% if ev.chamber == 'senate' %}text-indigo-700{% else %}text-emerald-700{% endif %}">
-            {{ ev.chamber[:1]|upper }}{{ ev.chamber[1:3] }}
-          </span>
-          {% if ev.time %}
-            <span class="text-slate-500">{{ ev.time }}</span>
-          {% endif %}
-          {% if ev.tracked %}
-            <span class="text-[9px] px-1 py-0.5 rounded bg-amber-200 text-amber-900 font-semibold">tracked</span>
-          {% endif %}
+  <div class="bg-white rounded-xl border {% if day.is_today %}border-blue-400 ring-2 ring-blue-100{% else %}border-slate-200{% endif %} shadow-sm overflow-hidden">
+    <div class="px-3 py-2 border-b border-slate-100 text-center {% if day.is_today %}bg-blue-50{% else %}bg-slate-50{% endif %}">
+      <p class="text-xs font-bold text-slate-500 uppercase">{{ day.weekday }}</p>
+      <p class="text-lg font-bold text-slate-800">{{ day.label }}</p>
+    </div>
+    <div class="p-3 space-y-3">
+      {% set chambers = [('senate', 'Senate', 'indigo'), ('house', 'House', 'emerald')] %}
+      {% for key, name, color in chambers %}
+        {% set ch = day[key] %}
+        {% if ch.status == 'in_session' %}{% set bg = 'bg-emerald-50 border-emerald-200 text-emerald-900' %}
+        {% elif ch.status == 'holiday' %}{% set bg = 'bg-amber-50 border-amber-200 text-amber-900' %}
+        {% elif ch.status == 'unknown' %}{% set bg = 'bg-slate-50 border-slate-200 text-slate-500' %}
+        {% else %}{% set bg = 'bg-slate-100 border-slate-200 text-slate-600' %}{% endif %}
+        <div class="rounded-lg border px-2.5 py-2 {{ bg }}">
+          <p class="text-[10px] font-bold uppercase tracking-wide {% if color == 'indigo' %}text-indigo-700{% else %}text-emerald-700{% endif %}">{{ name }}</p>
+          <p class="text-xs font-semibold mt-0.5 leading-snug">{{ ch.label }}</p>
         </div>
-        {% if ev.url %}
-          <a href="{{ ev.url }}" target="_blank" rel="noopener"
-             class="font-medium text-slate-800 hover:text-blue-600 line-clamp-3 leading-snug block">{{ ev.title }}</a>
-        {% else %}
-          <p class="font-medium text-slate-800 line-clamp-3 leading-snug">{{ ev.title }}</p>
-        {% endif %}
-        {% if ev.committee %}
-          <p class="text-[10px] text-slate-600 mt-1 truncate" title="{{ ev.committee }}">{{ ev.committee.split('(')[0].strip() }}</p>
-        {% elif ev.committee_raw %}
-          <p class="text-[10px] text-slate-500 mt-1 truncate" title="{{ ev.committee_raw }}">{{ ev.committee_raw[:40] }}</p>
-        {% endif %}
-        {% if ev.room %}
-          <p class="text-[10px] text-slate-400 mt-0.5">{{ ev.room }}</p>
-        {% endif %}
-      </div>
       {% endfor %}
-    {% else %}
-      <p class="text-[10px] text-slate-300 text-center mt-8">No meetings</p>
-    {% endif %}
+    </div>
   </div>
   {% endfor %}
 </div>
 
-<p class="text-center text-xs text-slate-400 mt-6">
-  <span class="inline-block w-3 h-3 rounded bg-indigo-100 border-l-4 border-indigo-400 align-middle mr-1"></span> Senate
-  <span class="inline-block w-3 h-3 rounded bg-emerald-50 border-l-4 border-emerald-500 align-middle mx-2"></span> House
-  <span class="inline-block w-3 h-3 rounded ring-1 ring-amber-300 align-middle mx-1"></span> Your tracked committees
-</p>
+{% else %}
+<!-- Month view -->
+<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+  <div class="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
+    {% for wd in cal.weekday_headers %}
+      <div class="text-center text-xs font-bold text-slate-500 uppercase py-2">{{ wd }}</div>
+    {% endfor %}
+  </div>
+  {% for week in cal.weeks %}
+  <div class="grid grid-cols-7 border-b border-slate-100 last:border-b-0 min-h-[88px]">
+    {% for cell in week %}
+      {% if cell.in_month %}
+      <div class="p-1.5 border-r border-slate-100 last:border-r-0 relative
+                  {% if cell.is_today %}bg-blue-50/60{% endif %}">
+        <p class="text-xs font-semibold text-slate-700 mb-1 {% if cell.is_today %}text-blue-700{% endif %}">
+          {{ cell.day_num }}
+        </p>
+        <div class="flex gap-0.5 h-10">
+          {% for key, color in [('senate', 'indigo'), ('house', 'emerald')] %}
+            {% set ch = cell[key] %}
+            {% if ch.status == 'in_session' %}{% set fill = 'bg-emerald-500' %}
+            {% elif ch.status == 'holiday' %}{% set fill = 'bg-amber-400' %}
+            {% elif ch.status == 'unknown' %}{% set fill = 'bg-slate-200' %}
+            {% else %}{% set fill = 'bg-slate-300' %}{% endif %}
+            <div class="flex-1 rounded-sm {{ fill }} opacity-90"
+                 title="{{ key|title }}: {{ ch.label }}"></div>
+          {% endfor %}
+        </div>
+        <p class="text-[9px] text-slate-400 mt-0.5 truncate" title="S: {{ cell.senate.label }} · H: {{ cell.house.label }}">
+          S: {{ cell.senate.label.split(' ')[0] }} · H: {{ cell.house.label.split(' ')[0] }}
+        </p>
+      </div>
+      {% else %}
+      <div class="p-1.5 bg-slate-50/50 border-r border-slate-100 last:border-r-0">
+        <p class="text-xs text-slate-300">{{ cell.day_num }}</p>
+      </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="mt-6 flex flex-wrap gap-2 text-xs">
+  <a href="{{ official_links.senate_schedule }}" target="_blank" rel="noopener"
+     class="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100">Senate 2026 schedule</a>
+  <a href="{{ official_links.house_schedule }}" target="_blank" rel="noopener"
+     class="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100">House legislative activity</a>
+  <a href="{{ official_links.senate_floor }}" target="_blank" rel="noopener"
+     class="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50">Senate floor schedule</a>
+</div>
 
 {% endblock %}

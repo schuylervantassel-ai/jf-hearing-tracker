@@ -82,7 +82,8 @@ from comit import (
     load_congress_config,
     pull_senate_schedule, refresh_govtrack_committee_cache,
     build_committee_ongoings, load_govtrack_cache,
-    pull_chamber_calendars, build_calendar_week, load_chamber_calendar,
+    pull_session_calendar, build_session_calendar_week, build_session_calendar_month,
+    load_chamber_calendar,
 )
 import json as _json
 
@@ -526,7 +527,7 @@ def _run_full_feed_import():
     social_feeds = load_social_feeds()
     new_rss = pull_rss_feeds(hearings, feeds, silent=True)
     sched = pull_senate_schedule(hearings, silent=True)
-    pull_chamber_calendars(silent=True)
+    pull_session_calendar(silent=True)
     refresh_govtrack_committee_cache(silent=True)
     api_key = _load_api_key()
     api_result = (
@@ -719,45 +720,65 @@ def add_feed():
 
 @app.route("/calendar")
 def chamber_calendar():
-    week = request.args.get("week", "")
-    tracked_only = request.args.get("tracked") == "1"
+    view = request.args.get("view", "week")
     cache = load_chamber_calendar()
-    cal = build_calendar_week(
-        week_start=week or None,
-        events=cache.get("events"),
-        tracked_only=tracked_only,
-    )
+    if view == "month":
+        ym = request.args.get("month", "")
+        year, month = None, None
+        if ym and "-" in ym:
+            parts = ym.split("-", 1)
+            try:
+                year, month = int(parts[0]), int(parts[1])
+            except ValueError:
+                pass
+        cal = build_session_calendar_month(year=year, month=month, cache=cache)
+    else:
+        cal = build_session_calendar_week(
+            week_start=request.args.get("week") or None,
+            cache=cache,
+        )
     return render_template(
         "calendar.html",
         cal=cal,
-        tracked_only=tracked_only,
+        view=cal["view"],
         cache_updated=cache.get("updated"),
         official_links={
-            "congress": "https://www.congress.gov/committee-schedule/",
-            "senate_committees": "https://www.senate.gov/committees/hearings.htm",
-            "house_calendar": "https://docs.house.gov/Committee/Calendar/",
+            "senate_schedule": cache.get("senate_source")
+            or "https://www.senate.gov/legislative/2026_schedule.htm",
+            "house_schedule": cache.get("house_source")
+            or "https://www.house.gov/legislative-activity",
             "senate_floor": "https://www.senate.gov/legislative/schedule/weekly.htm",
-            "house_floor": "https://www.house.gov/legislative-activity",
         },
     )
 
 
 @app.route("/calendar/pull", methods=["POST"])
 def pull_calendar():
-    redirect_to = request.form.get("next") or url_for(
-        "chamber_calendar", week=request.form.get("week", "")
-    )
+    view = request.form.get("view", "week")
+    week = request.form.get("week", "")
+    month = request.form.get("month", "")
+    if view == "month":
+        redirect_to = request.form.get("next") or url_for(
+            "chamber_calendar", view="month", month=month
+        )
+    else:
+        redirect_to = request.form.get("next") or url_for(
+            "chamber_calendar", view="week", week=week
+        )
     try:
         with DATA_LOCK:
-            hearings = load_data()
-            pull_chamber_calendars(silent=True)
-            pull_senate_schedule(hearings, silent=True)
+            pull_session_calendar(silent=True)
     except Exception as e:
         flash(f"Calendar refresh failed: {e}", "error")
         return redirect(redirect_to)
     cache = load_chamber_calendar()
-    n = len(cache.get("events") or [])
-    flash(f"Calendar refreshed — {n} meeting(s) from House & Senate schedules.", "success")
+    n_house = len(cache.get("house_days") or {})
+    n_senate = len(cache.get("senate_recess") or [])
+    flash(
+        f"Session calendar updated — House: {n_house} day(s) marked, "
+        f"Senate: {n_senate} recess period(s) loaded.",
+        "success",
+    )
     return redirect(redirect_to)
 
 
@@ -785,7 +806,7 @@ def pull_committees():
             feeds = load_feeds()
             new_rss = pull_rss_feeds(hearings, feeds, silent=True)
             sched = pull_senate_schedule(hearings, silent=True)
-            cal = pull_chamber_calendars(silent=True)
+            pull_session_calendar(silent=True)
             refresh_govtrack_committee_cache(silent=True)
             api_key = _load_api_key()
             api_result = (
@@ -798,8 +819,6 @@ def pull_committees():
     parts = []
     if new_rss:
         parts.append(f"{len(new_rss)} RSS")
-    if cal.get("events"):
-        parts.append(f"{len(cal['events'])} calendar")
     if sched.get("new"):
         parts.append(f"{len(sched['new'])} schedule")
     if sched.get("updated"):

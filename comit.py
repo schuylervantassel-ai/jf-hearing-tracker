@@ -8,6 +8,7 @@ Requirements:
     pip install feedparser openpyxl
 """
 
+import calendar
 import json
 import os
 import re
@@ -40,7 +41,8 @@ CONFIG_FILE  = _data_path("rss_config.json")
 GOVTRACK_CACHE_FILE = _data_path("govtrack_committees.json")
 CALENDAR_CACHE_FILE = _data_path("chamber_calendar.json")
 SOCIAL_FILE  = _data_path("social_feed.json")
-HOUSE_CALENDAR_BASE = "https://docs.house.gov/Committee/Calendar"
+SENATE_SCHEDULE_PAGE = "https://www.senate.gov/legislative/{year}_schedule.htm"
+HOUSE_SESSION_PAGE = "https://www.house.gov/legislative-activity/{year}-{month:02d}-01"
 SENATE_SCHEDULE_URL = "https://www.senate.gov/general/committee_schedules/hearings.xml"
 GOVTRACK_API_BASE = "https://www.govtrack.us/api/v2"
 SOCIAL_LIMIT = 500   # max items to keep across all social feeds
@@ -773,15 +775,12 @@ def pull_senate_schedule(hearings, silent=False):
     return {"new": new_items, "updated": updated}
 
 
-# ── House / Senate week calendar (official schedules) ─────────────────────────
+# ── House / Senate session calendar (in session vs recess) ───────────────────
 
-_HOUSE_COMMITTEE_PATTERNS = [
-    ("armed services", "House Armed Services (HASC)"),
-    ("foreign affairs", "House Foreign Affairs (HFAC)"),
-    ("permanent select committee on intelligence", "House Intelligence (HPSCI)"),
-    ("intelligence", "House Intelligence (HPSCI)"),
-    ("homeland security", "House Homeland Security (HHSC)"),
-]
+_MONTH_MAP = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
 
 
 def _fetch_url_bytes(url, timeout=15):
@@ -792,107 +791,146 @@ def _fetch_url_bytes(url, timeout=15):
         return resp.read()
 
 
-def _day_id_from_date(d):
-    """date → MMDDYYYY for docs.house.gov."""
-    return d.strftime("%m%d%Y")
-
-
-def _date_from_day_id(day_id):
-    m = re.match(r"^(\d{2})(\d{2})(\d{4})$", (day_id or "").strip())
+def _parse_month_day_token(token, year):
+    token = re.sub(r"&nbsp;", " ", (token or "")).strip()
+    m = re.match(r"([A-Za-z]+)\s*(\d{1,2})", token)
     if not m:
         return None
+    mo = _MONTH_MAP.get(m.group(1)[:3].lower())
+    if not mo:
+        return None
     try:
-        return date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+        return date(year, mo, int(m.group(2)))
     except ValueError:
         return None
 
 
-def _match_house_committee_label(committee_raw):
-    text = (committee_raw or "").lower()
-    for needle, label in _HOUSE_COMMITTEE_PATTERNS:
-        if needle in text:
-            return label
-    return None
-
-
-def _parse_house_day_html(html, meeting_date):
-    """Parse docs.house.gov ByDay.aspx table into calendar events."""
-    events = []
-    for chunk in html.split("<tr>")[2:]:
-        m_eid = re.search(r"EventID=(\d+)", chunk)
-        if not m_eid:
+def _parse_senate_recess_periods(year):
+    """Tentative recess / state work periods from Senate.gov schedule page."""
+    url = SENATE_SCHEDULE_PAGE.format(year=year)
+    html = _fetch_url_bytes(url).decode("utf-8", errors="replace")
+    periods = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S | re.I)
+        if len(cells) < 2:
             continue
-        m_title = re.search(r'title="([^"]*)"', chunk)
-        m_comm = re.search(r'<span class="text-tiny" title="([^"]*)"', chunk)
-        tds = re.findall(r"<td[^>]*>(.*?)</td>", chunk, re.DOTALL)
-        time_str = re.sub(r"<[^>]+>", "", tds[1]).strip() if len(tds) > 1 else ""
-        room = re.sub(r"<[^>]+>", "", tds[2]).strip() if len(tds) > 2 else ""
-        title = clean_html(m_title.group(1) if m_title else "")
-        committee_raw = clean_html(m_comm.group(1) if m_comm else "")
-        if not title:
+        datecell = re.sub(r"<[^>]+>", " ", cells[0])
+        datecell = re.sub(r"\s+", " ", datecell).strip()
+        action = re.sub(r"<[^>]+>", " ", cells[1])
+        action = re.sub(r"\s+", " ", action).strip()
+        note = ""
+        if len(cells) > 2:
+            note = re.sub(r"<[^>]+>", " ", cells[2])
+            note = re.sub(r"\s+", " ", note).strip()
+        if not re.search(r"\d", datecell) or datecell.lower().startswith("date"):
             continue
-        eid = m_eid.group(1)
-        label = _match_house_committee_label(committee_raw)
-        events.append({
-            "id": f"house-{eid}",
-            "chamber": "house",
-            "date": meeting_date.isoformat(),
-            "time": time_str,
-            "title": title[:500],
-            "committee_raw": committee_raw,
-            "committee": label,
-            "tracked": bool(label),
-            "room": room,
-            "url": f"{HOUSE_CALENDAR_BASE}/ByEvent.aspx?EventID={eid}",
-            "source": "house_calendar",
+        m = re.match(r"(.+?)\s*-\s*(.+)", datecell)
+        if not m:
+            continue
+        d1 = _parse_month_day_token(m.group(1), year)
+        d2 = _parse_month_day_token(m.group(2), year)
+        if not d1 or not d2:
+            continue
+        label = action or note or "Recess"
+        periods.append({
+            "start": d1.isoformat(),
+            "end": d2.isoformat(),
+            "label": label,
         })
-    return events
+    return periods, url
 
 
-def _parse_senate_schedule_events(root, code_map):
-    """All Senate committee meetings from hearings.xml (not only tracked)."""
-    cfg = load_congress_config()
-    congress = cfg["congress"]
-    events = []
-    for mtg in root.findall("meeting"):
-        cmte_code = (mtg.findtext("cmte_code") or "").lower()
-        committee_name = _committee_from_system_code(cmte_code, code_map)
-        event_id = (mtg.findtext("identifier") or "").strip()
-        matter = clean_html(mtg.findtext("matter") or "")
-        meeting_date = (mtg.findtext("date_iso_8601") or "")[:10]
-        if not meeting_date or not meeting_date[0].isdigit():
+def _house_class_to_status(css_class):
+    css = (css_class or "").strip().lower()
+    if "in-session" in css:
+        return "in_session", "In session"
+    if "district-work" in css:
+        return "recess", "District work period"
+    if "holiday" in css or "federal" in css:
+        return "holiday", "Federal holiday"
+    if not css:
+        return "recess", "Not in session"
+    return "unknown", css.replace("-", " ").title()
+
+
+def _parse_house_session_month(html, year, month):
+    """Extract per-day House status from house.gov legislative-activity calendar."""
+    days = {}
+    for table in re.findall(
+        r'<table class="housegov-calendar"[^>]*id="housegov-calendar-'
+        r'(\d+)-(\d+)"[^>]*>(.*?)</table>',
+        html,
+        re.S | re.I,
+    ):
+        tbl_month, tbl_year = int(table[0]), int(table[1])
+        if tbl_year != year or tbl_month != month:
             continue
-        if not matter and not event_id:
-            continue
-        sub = mtg.findtext("sub_cmte") or ""
-        committee_raw = mtg.findtext("committee") or ""
-        if sub:
-            committee_raw = f"{committee_raw} — {sub}" if committee_raw else sub
-        events.append({
-            "id": f"senate-{event_id}",
-            "chamber": "senate",
-            "date": meeting_date,
-            "time": (mtg.findtext("time") or "").strip(),
-            "title": (matter or "Senate committee meeting")[:500],
-            "committee_raw": committee_raw,
-            "committee": committee_name,
-            "tracked": bool(committee_name),
-            "room": (mtg.findtext("room") or "").strip(),
-            "url": (
-                f"https://www.congress.gov/committee-meeting/"
-                f"{congress}/senate/{event_id}"
-                if event_id else ""
-            ),
-            "source": "senate_calendar",
-        })
-    return events
+        for td in re.findall(
+            r'<td class="([^"]*)"[^>]*>(.*?)</td>',
+            table[2],
+            re.S | re.I,
+        ):
+            m_date = re.search(
+                r'class="screen-reader-text">([A-Za-z]+ \d{1,2}, \d{4})',
+                td[1],
+            )
+            if not m_date:
+                continue
+            try:
+                d = datetime.strptime(m_date.group(1), "%B %d, %Y").date()
+            except ValueError:
+                continue
+            status, label = _house_class_to_status(td[0])
+            days[d.isoformat()] = {"status": status, "label": label}
+    return days
+
+
+def _parse_house_session_calendar(year, silent=False):
+    """Fetch House.gov calendar tables (main page + monthly URLs)."""
+    all_days = {}
+    errors = []
+    try:
+        html_main = _fetch_url_bytes(
+            "https://www.house.gov/legislative-activity", timeout=20
+        ).decode("utf-8", errors="replace")
+        for month in range(1, 13):
+            all_days.update(_parse_house_session_month(html_main, year, month))
+    except Exception as e:
+        errors.append(f"main: {e}")
+
+    for month in range(1, 13):
+        url = HOUSE_SESSION_PAGE.format(year=year, month=month)
+        if not silent:
+            print(f"    House {year}-{month:02d} ... ", end="", flush=True)
+        try:
+            html = _fetch_url_bytes(url, timeout=20).decode("utf-8", errors="replace")
+            days = _parse_house_session_month(html, year, month)
+            all_days.update(days)
+            if not silent:
+                print(f"{len(days)} days")
+            time.sleep(0.2)
+        except Exception as e:
+            errors.append(f"{month:02d}: {e}")
+            if not silent:
+                print(f"FAILED ({e})")
+    return all_days, errors
+
+
+def _senate_status_for_day(d, recess_periods):
+    iso = d.isoformat()
+    for p in recess_periods:
+        if p["start"] <= iso <= p["end"]:
+            return "recess", p["label"]
+    if d.weekday() >= 5:
+        return "recess", "Weekend"
+    return "in_session", "Expected in session"
 
 
 def load_chamber_calendar():
     if os.path.exists(CALENDAR_CACHE_FILE):
         with open(CALENDAR_CACHE_FILE) as f:
             return json.load(f)
-    return {"updated": None, "events": []}
+    return {"updated": None, "year": date.today().year, "senate_recess": [], "house_days": {}}
 
 
 def save_chamber_calendar(data):
@@ -900,116 +938,155 @@ def save_chamber_calendar(data):
         json.dump(data, f, indent=2)
 
 
-def pull_chamber_calendars(silent=False, days_back=1, days_ahead=21):
-    """
-    Refresh chamber_calendar.json from Senate XML and House ByDay pages.
-    """
-    cfg = load_congress_config()
-    code_map = cfg["committee_codes"]
-    events = []
+def pull_session_calendar(silent=False, year=None):
+    """Refresh in-session / recess data for House and Senate."""
+    year = year or date.today().year
     errors = []
 
     if not silent:
-        print("  Senate calendar (all committees) ... ", end="", flush=True)
+        print(f"  Senate {year} tentative schedule ... ", end="", flush=True)
     try:
-        root = ET.fromstring(_fetch_senate_schedule_xml())
-        events.extend(_parse_senate_schedule_events(root, code_map))
+        senate_recess, senate_url = _parse_senate_recess_periods(year)
         if not silent:
-            print(f"{sum(1 for e in events if e['chamber']=='senate')} meetings")
+            print(f"{len(senate_recess)} recess period(s)")
     except Exception as e:
+        senate_recess, senate_url = [], SENATE_SCHEDULE_PAGE.format(year=year)
         errors.append(f"Senate: {e}")
         if not silent:
             print(f"FAILED ({e})")
 
     if not silent:
-        print("  House calendar (docs.house.gov) ... ", end="", flush=True)
-    today = date.today()
-    house_count = 0
-    for offset in range(-days_back, days_ahead + 1):
-        d = today.fromordinal(today.toordinal() + offset)
-        day_id = _day_id_from_date(d)
-        url = f"{HOUSE_CALENDAR_BASE}/ByDay.aspx?DayID={day_id}"
-        try:
-            html = _fetch_url_bytes(url).decode("utf-8", errors="replace")
-            day_events = _parse_house_day_html(html, d)
-            events.extend(day_events)
-            house_count += len(day_events)
-            time.sleep(0.15)  # be polite to House servers
-        except Exception as e:
-            errors.append(f"House {day_id}: {e}")
-    if not silent:
-        print(f"{house_count} meetings")
-
-    # De-dupe by id
-    seen = set()
-    unique = []
-    for ev in events:
-        if ev["id"] in seen:
-            continue
-        seen.add(ev["id"])
-        unique.append(ev)
+        print(f"  House {year} session calendar ...")
+    try:
+        house_days, house_errors = _parse_house_session_calendar(year, silent=silent)
+        errors.extend(house_errors[:5])
+    except Exception as e:
+        house_days = {}
+        errors.append(f"House: {e}")
 
     data = {
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "events": unique,
-        "errors": errors[:5],
+        "year": year,
+        "senate_source": senate_url,
+        "house_source": "https://www.house.gov/legislative-activity",
+        "senate_recess": senate_recess,
+        "house_days": house_days,
+        "errors": errors[:8],
     }
     save_chamber_calendar(data)
     return data
 
 
+# Back-compat alias
+pull_chamber_calendars = pull_session_calendar
+
+
 def _monday_of_week(d):
-    """Return Monday on or before date d."""
     return d.fromordinal(d.toordinal() - d.weekday())
 
 
-def build_calendar_week(week_start=None, events=None, tracked_only=False):
-    """
-    Build 7-day grid for calendar UI.
-    week_start: ISO date string (Monday) or None for current week.
-    """
-    if events is None:
-        events = load_chamber_calendar().get("events") or []
+def _day_session_info(d, cache):
+    recess = cache.get("senate_recess") or []
+    house_days = cache.get("house_days") or {}
+    iso = d.isoformat()
+    s_status, s_label = _senate_status_for_day(d, recess)
+    h_info = house_days.get(iso)
+    if h_info:
+        h_status, h_label = h_info["status"], h_info["label"]
+    elif d.weekday() >= 5:
+        h_status, h_label = "recess", "Weekend"
+    else:
+        h_status, h_label = "unknown", "No House data"
+    return {
+        "date": iso,
+        "weekday": d.strftime("%a"),
+        "label": d.strftime("%b %d"),
+        "day_num": d.day,
+        "is_today": d == date.today(),
+        "senate": {"status": s_status, "label": s_label},
+        "house": {"status": h_status, "label": h_label},
+    }
+
+
+def build_session_calendar_week(week_start=None, cache=None):
+    if cache is None:
+        cache = load_chamber_calendar()
     if week_start:
         try:
-            monday = date.fromisoformat(week_start)
+            monday = _monday_of_week(date.fromisoformat(week_start))
         except ValueError:
             monday = _monday_of_week(date.today())
     else:
         monday = _monday_of_week(date.today())
-    monday = _monday_of_week(monday)
 
     days = []
     for i in range(7):
         d = monday.fromordinal(monday.toordinal() + i)
-        iso = d.isoformat()
-        day_events = [e for e in events if e.get("date") == iso]
-        if tracked_only:
-            day_events = [e for e in day_events if e.get("tracked")]
-        day_events.sort(key=lambda e: (e.get("time") or "99:99", e.get("chamber", "")))
-        days.append({
-            "date": iso,
-            "weekday": d.strftime("%a"),
-            "label": d.strftime("%b %d"),
-            "is_today": d == date.today(),
-            "events": day_events,
-        })
+        days.append(_day_session_info(d, cache))
 
-    prev_monday = monday.fromordinal(monday.toordinal() - 7).isoformat()
-    next_monday = monday.fromordinal(monday.toordinal() + 7).isoformat()
     return {
+        "view": "week",
         "week_start": monday.isoformat(),
         "week_end": monday.fromordinal(monday.toordinal() + 6).isoformat(),
-        "prev_week": prev_monday,
-        "next_week": next_monday,
+        "prev_week": monday.fromordinal(monday.toordinal() - 7).isoformat(),
+        "next_week": monday.fromordinal(monday.toordinal() + 7).isoformat(),
         "days": days,
-        "total_events": sum(len(d["events"]) for d in days),
-        "tracked_events": sum(
-            1 for e in events
-            if e.get("tracked") and monday.isoformat() <= e.get("date", "") <=
-            monday.fromordinal(monday.toordinal() + 6).isoformat()
-        ),
+        "year": cache.get("year", monday.year),
     }
+
+
+def build_session_calendar_month(year=None, month=None, cache=None):
+    if cache is None:
+        cache = load_chamber_calendar()
+    today = date.today()
+    year = int(year or cache.get("year") or today.year)
+    month = int(month or today.month)
+    if month < 1 or month > 12:
+        month = today.month
+
+    first = date(year, month, 1)
+    if month == 12:
+        last = date(year, 12, 31)
+    else:
+        last = date(year, month + 1, 1).fromordinal(date(year, month + 1, 1).toordinal() - 1)
+
+    cal = calendar.Calendar(firstweekday=6)  # Sunday-first month grid
+    weeks = []
+    for week in cal.monthdatescalendar(year, month):
+        row = []
+        for d in week:
+            if d.month != month:
+                row.append({
+                    "in_month": False,
+                    "date": d.isoformat(),
+                    "day_num": d.day,
+                })
+            else:
+                info = _day_session_info(d, cache)
+                info["in_month"] = True
+                row.append(info)
+        weeks.append(row)
+
+    prev_m, prev_y = (month - 1, year) if month > 1 else (12, year - 1)
+    next_m, next_y = (month + 1, year) if month < 12 else (1, year + 1)
+
+    return {
+        "view": "month",
+        "year": year,
+        "month": month,
+        "month_name": first.strftime("%B %Y"),
+        "month_start": first.isoformat(),
+        "month_end": last.isoformat(),
+        "prev_month": f"{prev_y}-{prev_m:02d}",
+        "next_month": f"{next_y}-{next_m:02d}",
+        "weeks": weeks,
+        "weekday_headers": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    }
+
+
+def build_calendar_week(week_start=None, events=None, tracked_only=False):
+    """Legacy name — session week view."""
+    return build_session_calendar_week(week_start=week_start)
 
 
 def build_committee_ongoings(hearings, govtrack_cache=None):
