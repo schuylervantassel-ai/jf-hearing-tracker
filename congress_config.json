@@ -6,14 +6,14 @@
   "senate_schedule_url": "https://www.senate.gov/general/committee_schedules/hearings.xml",
   "govtrack_api_base": "https://www.govtrack.us/api/v2",
   "committees": [
-    {"system_code": "ssas00", "govtrack_code": "SSAS", "label": "Senate Armed Services (SASC)", "chamber": "senate"},
-    {"system_code": "ssfr00", "govtrack_code": "SSFR", "label": "Senate Foreign Relations (SFRC)", "chamber": "senate"},
-    {"system_code": "slin00", "govtrack_code": "SLIN", "label": "Senate Intelligence (SSCI)", "chamber": "senate"},
-    {"system_code": "ssga00", "govtrack_code": "SSGA", "label": "Senate Homeland Security (SHSGAC)", "chamber": "senate"},
-    {"system_code": "hsas00", "govtrack_code": "HSAS", "label": "House Armed Services (HASC)", "chamber": "house"},
-    {"system_code": "hsfa00", "govtrack_code": "HSFA", "label": "House Foreign Affairs (HFAC)", "chamber": "house"},
-    {"system_code": "hlig00", "govtrack_code": "HLIG", "label": "House Intelligence (HPSCI)", "chamber": "house"},
-    {"system_code": "hshm00", "govtrack_code": "HSHM", "label": "House Homeland Security (HHSC)", "chamber": "house"}
+    {"system_code": "ssas00", "govtrack_code": "SSAS", "label": "Senate Armed Services (SASC)", "chamber": "senate", "site_url": "https://www.armed-services.senate.gov/"},
+    {"system_code": "ssfr00", "govtrack_code": "SSFR", "label": "Senate Foreign Relations (SFRC)", "chamber": "senate", "site_url": "https://www.foreign.senate.gov/"},
+    {"system_code": "slin00", "govtrack_code": "SLIN", "label": "Senate Intelligence (SSCI)", "chamber": "senate", "site_url": "https://www.intelligence.senate.gov/"},
+    {"system_code": "ssga00", "govtrack_code": "SSGA", "label": "Senate Homeland Security (SHSGAC)", "chamber": "senate", "site_url": "https://www.hsgac.senate.gov/"},
+    {"system_code": "hsas00", "govtrack_code": "HSAS", "label": "House Armed Services (HASC)", "chamber": "house", "site_url": "https://armedservices.house.gov/"},
+    {"system_code": "hsfa00", "govtrack_code": "HSFA", "label": "House Foreign Affairs (HFAC)", "chamber": "house", "site_url": "https://foreignaffairs.house.gov/"},
+    {"system_code": "hlig00", "govtrack_code": "HLIG", "label": "House Intelligence (HPSCI)", "chamber": "house", "site_url": "https://intelligence.house.gov/"},
+    {"system_code": "hshm00", "govtrack_code": "HSHM", "label": "House Homeland Security (HHSC)", "chamber": "house", "site_url": "https://homeland.house.gov/"}
   ],
   "endpoints": {
     "house_meetings": "https://api.congress.gov/v3/committee-meeting/119/house",

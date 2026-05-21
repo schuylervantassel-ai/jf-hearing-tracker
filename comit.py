@@ -14,6 +14,7 @@ import os
 import re
 import ssl
 import sys
+from html import unescape
 from datetime import datetime, date
 from urllib.parse import urlencode
 from urllib.request import urlopen, Request
@@ -580,7 +581,7 @@ def pull_rss_feeds(hearings, feeds, silent=False):
                     "status":    auto_status,
                     "questions": "",
                     "notes":     summary[:300] if summary else "",
-                    "url":       item.get("url", ""),
+                    "url":       normalize_external_url(item.get("url", "")),
                     "source":    "rss",
                     "created":   datetime.now().strftime("%Y-%m-%d"),
                 }
@@ -606,6 +607,132 @@ def pull_rss_feeds(hearings, feeds, silent=False):
     return new_items
 
 # ── GovTrack + Senate schedule (committee on-goings) ─────────────────────────
+
+# Canonical HTTPS committee home pages (overrides stale GovTrack http:// URLs).
+OFFICIAL_COMMITTEE_SITES = {
+    "Senate Armed Services (SASC)": "https://www.armed-services.senate.gov/",
+    "Senate Foreign Relations (SFRC)": "https://www.foreign.senate.gov/",
+    "Senate Intelligence (SSCI)": "https://www.intelligence.senate.gov/",
+    "Senate Homeland Security (SHSGAC)": "https://www.hsgac.senate.gov/",
+    "House Armed Services (HASC)": "https://armedservices.house.gov/",
+    "House Foreign Affairs (HFAC)": "https://foreignaffairs.house.gov/",
+    "House Intelligence (HPSCI)": "https://intelligence.house.gov/",
+    "House Homeland Security (HHSC)": "https://homeland.house.gov/",
+}
+
+_SENATE_ISVP_RE = re.compile(r"https?://www\.senate\.gov/isvp/[^\s;]+", re.I)
+
+
+def _committee_site_urls(cfg=None):
+    urls = dict(OFFICIAL_COMMITTEE_SITES)
+    if cfg is None:
+        cfg = load_congress_config()
+    for entry in cfg.get("committees") or []:
+        label = entry.get("label", "")
+        site = (entry.get("site_url") or "").strip()
+        if label and site:
+            urls[label] = site
+    return urls
+
+
+def normalize_external_url(url):
+    """Force https and decode XML entities in outbound links."""
+    if not url:
+        return ""
+    url = unescape(str(url).strip())
+    if url.startswith("http://"):
+        url = "https://" + url[7:]
+    return url
+
+
+def _senate_schedule_meeting_url(video_url, congress, event_id):
+    """Prefer Senate ISVP stream/page from schedule XML over Congress.gov."""
+    video = normalize_external_url(video_url)
+    if video and "senate.gov" in video:
+        return video
+    if event_id:
+        return (
+            f"https://www.congress.gov/committee-meeting/"
+            f"{congress}/senate/{event_id}"
+        )
+    return ""
+
+
+_LEGACY_CONGRESS_MTG_RE = re.compile(
+    r"^https://www\.congress\.gov/committee-meeting/(\d+)/(house|senate)/(\d+)$",
+    re.I,
+)
+
+
+def _chamber_slug(chamber):
+    c = (chamber or "").lower()
+    return "house" if c in ("house", "h") else "senate"
+
+
+def _congress_event_page_url(congress, chamber, event_id):
+    """Public Congress.gov event page (API uses this form in meeting videos)."""
+    ch = _chamber_slug(chamber)
+    return f"https://www.congress.gov/event/{congress}th-Congress/{ch}-event/{event_id}"
+
+
+def _urls_from_api_videos(meeting):
+    """Pick the best public link from API meeting videos (ISVP preferred for Senate)."""
+    senate_stream = ""
+    congress_event = ""
+    fallback = ""
+    for v in (meeting or {}).get("videos") or []:
+        u = normalize_external_url(v.get("url") or "")
+        if not u or "api.congress.gov" in u:
+            continue
+        if "senate.gov" in u:
+            senate_stream = u
+        elif "congress.gov/event" in u:
+            congress_event = u
+        elif not fallback and "congress.gov" not in u:
+            fallback = u
+    return senate_stream or congress_event or fallback
+
+
+def _congress_api_meeting_url(meeting, congress, chamber, event_id):
+    """Use video/stream URLs from the API; fall back to Congress.gov event page."""
+    from_videos = _urls_from_api_videos(meeting)
+    if from_videos:
+        return from_videos
+    for key in ("url", "meetingUrl", "webLink"):
+        raw = normalize_external_url((meeting or {}).get(key) or "")
+        if not raw or "api.congress.gov" in raw:
+            continue
+        if any(host in raw for host in ("congress.gov", "house.gov", "senate.gov")):
+            return raw
+    if event_id:
+        return _congress_event_page_url(congress, chamber, event_id)
+    return ""
+
+
+def repair_stored_hearing_urls(hearings):
+    """
+    Fix URLs already on disk: schedule rows → Senate ISVP when in notes,
+    and upgrade http:// links to https://.
+    """
+    changed = 0
+    for h in hearings:
+        old = h.get("url") or ""
+        new = normalize_external_url(old)
+        if h.get("source") == "schedule":
+            m = _SENATE_ISVP_RE.search(h.get("notes") or "")
+            if m:
+                new = normalize_external_url(m.group(0))
+        elif h.get("source") == "api":
+            m = _LEGACY_CONGRESS_MTG_RE.match(new or old)
+            if m:
+                new = _congress_event_page_url(m.group(1), m.group(2), m.group(3))
+        if new and new != old:
+            h["url"] = new
+            changed += 1
+    if changed:
+        save_data(hearings)
+    return changed
+
 
 def fetch_govtrack_json(path):
     """GET GovTrack API v2 (no key required). path e.g. '/committee?code=SSAS'."""
@@ -644,6 +771,7 @@ def refresh_govtrack_committee_cache(silent=False):
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "committees": dict(prior.get("committees") or {}),
     }
+    site_urls = _committee_site_urls(cfg)
     for entry in cfg.get("committees") or []:
         code = entry.get("govtrack_code") or ""
         label = entry.get("label", "")
@@ -665,7 +793,7 @@ def refresh_govtrack_committee_cache(silent=False):
                 "abbrev": o.get("abbrev", ""),
                 "jurisdiction": o.get("jurisdiction", ""),
                 "jurisdiction_link": o.get("jurisdiction_link", ""),
-                "official_url": o.get("url", ""),
+                "official_url": site_urls.get(label) or normalize_external_url(o.get("url", "")),
                 "govtrack_url": f"https://www.govtrack.us/congress/committees/{code}",
                 "chamber": o.get("committee_type", entry.get("chamber", "")),
             }
@@ -740,9 +868,7 @@ def pull_senate_schedule(hearings, silent=False):
             hearing["date"] = meeting_date
             hearing["status"] = status
             hearing["notes"] = notes
-            hearing["url"] = (
-                f"https://www.congress.gov/committee-meeting/{congress}/senate/{event_id}"
-            )
+            hearing["url"] = _senate_schedule_meeting_url(video, congress, event_id)
             hearing["congress_event_id"] = event_id
             hearing["source"] = "schedule"
             hearing["angle"] = detect_angle(title)
@@ -761,10 +887,7 @@ def pull_senate_schedule(hearings, silent=False):
                 "status": status,
                 "questions": "",
                 "notes": notes,
-                "url": (
-                    f"https://www.congress.gov/committee-meeting/"
-                    f"{congress}/senate/{event_id}"
-                ),
+                "url": _senate_schedule_meeting_url(video, congress, event_id),
                 "congress_event_id": event_id,
                 "source": "schedule",
                 "created": date.today().isoformat(),
@@ -772,6 +895,7 @@ def pull_senate_schedule(hearings, silent=False):
             new_items.append(h)
             hearings.append(h)
 
+    repair_stored_hearing_urls(hearings)
     save_data(hearings)
     if not silent:
         print(f"{len(new_items)} new, {updated} updated")
@@ -1388,7 +1512,8 @@ def _resolve_tracked_committee(meeting, committee_codes):
 def _find_hearing_for_api(hearings, event_id, committee_name, title):
     for h in hearings:
         if str(h.get("congress_event_id") or "") == event_id:
-            return h
+            if h.get("committee") == committee_name:
+                return h
     title_lower = title.lower().strip()
     for h in hearings:
         if h.get("committee") != committee_name:
@@ -1418,9 +1543,7 @@ def _apply_api_fields(hearing, meeting, *, committee_name, chamber, congress,
     hearing["status"] = _status_from_api(meeting, meeting_date)
     hearing["angle"] = detect_angle(title)
     hearing["notes"] = notes.strip("; ")
-    hearing["url"] = (
-        f"https://www.congress.gov/committee-meeting/{congress}/{chamber}/{event_id}"
-    )
+    hearing["url"] = _congress_api_meeting_url(meeting, congress, chamber, event_id)
     hearing["congress_event_id"] = event_id
     hearing["source"] = "api"
 
@@ -1540,9 +1663,68 @@ def pull_congress_api(hearings, api_key, silent=False):
             if not silent:
                 print(f"FAILED ({e})")
 
+    if api_key and api_key.strip():
+        reconcile_api_hearings(hearings, api_key, cfg, silent=silent)
+
     if changed:
         save_data(hearings)
     return {"new": new_items, "updated": updated_count}
+
+
+def reconcile_api_hearings(hearings, api_key, cfg, silent=False):
+    """
+    Re-fetch Congress.gov API rows to fix broken /committee-meeting/ links and
+    committee labels polluted by event-id collisions across committees.
+    """
+    congress = cfg["congress"]
+    api_base = cfg["api_base"]
+    codes = cfg["committee_codes"]
+    changed = 0
+    for h in hearings:
+        if h.get("source") != "api":
+            continue
+        event_id = str(h.get("congress_event_id") or "").strip()
+        if not event_id:
+            continue
+        chamber = _chamber_slug(
+            "senate" if "Senate" in (h.get("committee") or "") else "house"
+        )
+        try:
+            time.sleep(0.08)
+            detail = fetch_json(
+                f"{api_base}/committee-meeting/{congress}/{chamber}/{event_id}",
+                api_key,
+            )
+            meeting = detail.get("committeeMeeting", {})
+        except Exception:
+            continue
+
+        resolved = _resolve_tracked_committee(meeting, codes)
+        new_url = _congress_api_meeting_url(meeting, congress, chamber, event_id)
+        title = (meeting.get("title") or "").strip()
+
+        if resolved and resolved != h.get("committee"):
+            h["committee"] = resolved
+            changed += 1
+        if title and title != (h.get("topic") or ""):
+            h["topic"] = title
+            changed += 1
+        if new_url and new_url != (h.get("url") or ""):
+            h["url"] = new_url
+            changed += 1
+        if not resolved:
+            note = "Congress.gov: meeting is not for a tracked committee"
+            if note not in (h.get("notes") or ""):
+                h["notes"] = ((h.get("notes") or "") + "; " + note).strip("; ")
+            if h.get("committee") in _committee_site_urls(cfg):
+                h["committee"] = "Other"
+                changed += 1
+
+    if changed:
+        save_data(hearings)
+        if not silent:
+            print(f"  Congress.gov API reconcile: {changed} record(s) corrected")
+    return changed
 
 # ── Federal Register API ──────────────────────────────────────────────────────
 

@@ -94,14 +94,26 @@
             {% for h in sec.upcoming %}
               {% set da = days_away(h.date) %}
               <li>
-                <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
-                  <p class="text-sm font-medium text-slate-800 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
-                  <p class="text-xs text-slate-500 mt-0.5">
-                    {{ h.date }}
-                    {% if h.get('source') %} · {{ h.source }}{% endif %}
-                    {% if da is not none and da >= 0 %} · in {{ da }}d{% endif %}
-                  </p>
-                </a>
+                {% if h.url %}
+                  <a href="{{ h.url }}" target="_blank" rel="noopener" class="block group">
+                    <p class="text-sm font-medium text-slate-800 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                      {{ h.date }}
+                      {% if h.get('source') %} · {{ h.source }}{% endif %}
+                      {% if da is not none and da >= 0 %} · in {{ da }}d{% endif %}
+                    </p>
+                  </a>
+                  <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="text-[10px] text-blue-600 hover:underline mt-0.5 inline-block">Tracker record</a>
+                {% else %}
+                  <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
+                    <p class="text-sm font-medium text-slate-800 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                      {{ h.date }}
+                      {% if h.get('source') %} · {{ h.source }}{% endif %}
+                      {% if da is not none and da >= 0 %} · in {{ da }}d{% endif %}
+                    </p>
+                  </a>
+                {% endif %}
               </li>
             {% endfor %}
           </ul>
@@ -117,10 +129,17 @@
           <ul class="space-y-3">
             {% for h in sec.recent %}
               <li>
-                <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
-                  <p class="text-sm text-slate-700 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
-                  <span class="inline-block mt-1 text-xs px-1.5 py-0.5 rounded {{ status_cls(h.status) }}">{{ h.status }}</span>
-                </a>
+                {% if h.url %}
+                  <a href="{{ h.url }}" target="_blank" rel="noopener" class="block group">
+                    <p class="text-sm text-slate-700 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
+                    <span class="inline-block mt-1 text-xs px-1.5 py-0.5 rounded {{ status_cls(h.status) }}">{{ h.status }}</span>
+                  </a>
+                {% else %}
+                  <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
+                    <p class="text-sm text-slate-700 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
+                    <span class="inline-block mt-1 text-xs px-1.5 py-0.5 rounded {{ status_cls(h.status) }}">{{ h.status }}</span>
+                  </a>
+                {% endif %}
               </li>
             {% endfor %}
           </ul>
