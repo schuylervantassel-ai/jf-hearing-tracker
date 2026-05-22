@@ -146,6 +146,16 @@
       <div class="flex items-center gap-2">{% block header_actions %}{% endblock %}</div>
     </header>
 
+    <div id="feed-sync-banner" class="hidden px-8 pt-5">
+      <div class="flex items-center gap-3 px-4 py-3 rounded-lg border text-sm bg-blue-50 border-blue-200 text-blue-800">
+        <svg class="w-4 h-4 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span id="feed-sync-banner-text" class="flex-1">Syncing in the background…</span>
+      </div>
+    </div>
+
     <!-- Flash messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -168,6 +178,91 @@
       {% block content %}{% endblock %}
     </main>
   </div>
+
+  <script>
+  (function () {
+    var pollUrl = {{ url_for('poll_status') | tojson }};
+    var banner = document.getElementById('feed-sync-banner');
+    var bannerText = document.getElementById('feed-sync-banner-text');
+    var sawBusy = {{ pull_status.in_progress | tojson }};
+    var watchReload = sessionStorage.getItem('hearingTrackerWatchPull') === '1'
+      || {{ pull_status.in_progress | tojson }};
+
+    document.querySelectorAll('.js-watch-pull').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        sessionStorage.setItem('hearingTrackerWatchPull', '1');
+        watchReload = true;
+      });
+    });
+
+    function showBanner(text) {
+      if (!banner) return;
+      banner.classList.remove('hidden');
+      if (bannerText) bannerText.textContent = text;
+    }
+
+    function hideBanner() {
+      if (banner) banner.classList.add('hidden');
+    }
+
+    function showCompletionFlash(message) {
+      var container = document.createElement('div');
+      container.className = 'px-8 pt-5';
+      container.innerHTML =
+        '<div class="flex items-center gap-3 px-4 py-3 rounded-lg border text-sm bg-emerald-50 border-emerald-200 text-emerald-800">' +
+        '<span class="flex-1"></span><button type="button" class="opacity-50 hover:opacity-100 text-lg leading-none" aria-label="Dismiss">×</button></div>';
+      container.querySelector('span').textContent = message;
+      container.querySelector('button').onclick = function () { container.remove(); };
+      var header = document.querySelector('header');
+      if (header) header.insertAdjacentElement('afterend', container);
+    }
+
+    function onComplete(data) {
+      sessionStorage.removeItem('hearingTrackerWatchPull');
+      hideBanner();
+      if (data.message) {
+        sessionStorage.setItem('hearingTrackerPullMessage', data.message);
+      }
+      window.location.reload();
+    }
+
+    function poll() {
+      fetch(pollUrl, { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.in_progress) {
+            sawBusy = true;
+            showBanner('Syncing feeds and data in the background — this page will refresh when done.');
+            setTimeout(poll, 2000);
+            return;
+          }
+          if (watchReload) {
+            onComplete(data);
+            return;
+          }
+          hideBanner();
+          setTimeout(poll, 60000);
+        })
+        .catch(function () {
+          setTimeout(poll, 5000);
+        });
+    }
+
+    var savedMsg = sessionStorage.getItem('hearingTrackerPullMessage');
+    if (savedMsg) {
+      sessionStorage.removeItem('hearingTrackerPullMessage');
+      showCompletionFlash(savedMsg);
+    }
+
+    if (watchReload || sawBusy) {
+      if (sawBusy) {
+        showBanner('Syncing feeds and data in the background — this page will refresh when done.');
+      }
+      poll();
+    }
+  })();
+  </script>
+  {% block extra_scripts %}{% endblock %}
 
 </body>
 </html>

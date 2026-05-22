@@ -5,7 +5,7 @@
 {% block header_actions %}
   <div class="flex items-center gap-3 flex-wrap justify-end">
     {% if api_key_configured %}
-    <form method="post" action="{{ url_for('pull_api_only') }}">
+    <form method="post" action="{{ url_for('pull_api_only') }}" class="js-watch-pull">
       <button type="submit"
               class="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -15,7 +15,7 @@
       </button>
     </form>
     {% endif %}
-    <form method="post" action="{{ url_for('pull_feeds') }}">
+    <form method="post" action="{{ url_for('pull_feeds') }}" class="js-watch-pull">
       <button type="submit"
               class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -40,7 +40,7 @@
 {% endif %}
 
 <div id="feeds-new-pull-banner" class="hidden mb-4 px-4 py-2.5 rounded-lg bg-emerald-50/90 border border-emerald-100 text-sm text-emerald-900 shadow-sm">
-  New hearings were imported from the latest background sync. Refresh the list to review them.
+  Feed refresh finished — reloading…
 </div>
 
 <!-- Feed list -->
@@ -180,7 +180,7 @@
       &nbsp;·&nbsp; {{ congress_config.limit_per_committee }} meetings per committee pull
       ({{ congress_config.congress }}th Congress). Updates existing rows when matched.
     </p>
-    <form method="post" action="{{ url_for('pull_api_only') }}">
+    <form method="post" action="{{ url_for('pull_api_only') }}" class="js-watch-pull">
       <button type="submit"
               class="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -297,11 +297,16 @@
 
   function schedulePoll() {
     poll().then(function (busy) {
-      setTimeout(schedulePoll, busy ? 5000 : 60000);
+      setTimeout(schedulePoll, busy ? 2000 : 60000);
     });
   }
 
-  schedulePoll();
+  if (sessionStorage.getItem('hearingTrackerWatchPull') === '1' || {{ pull_status.in_progress | tojson }}) {
+    schedulePoll();
+  } else {
+    poll();
+    setTimeout(schedulePoll, 60000);
+  }
 })();
 </script>
 

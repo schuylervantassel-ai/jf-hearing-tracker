@@ -4,7 +4,7 @@
 
 {% block header_actions %}
   <div class="flex items-center gap-2">
-    <form method="post" action="{{ url_for('pull_committees') }}">
+    <form method="post" action="{{ url_for('pull_committees') }}" class="js-watch-pull">
       <input type="hidden" name="next" value="{{ url_for('committees_ongoings') }}"/>
       <button type="submit"
               class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">

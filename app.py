@@ -650,6 +650,12 @@ def poll_status():
     return jsonify(_last_pull)
 
 
+@app.context_processor
+def inject_pull_status():
+    """Expose background pull state to all templates (polling / auto-reload)."""
+    return {"pull_status": dict(_last_pull)}
+
+
 def _flash_pull_started(redirect_url):
     flash(
         "Feed refresh started in the background (usually under a minute). "

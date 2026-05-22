@@ -31,7 +31,7 @@
       </a>
     </div>
 
-    <form method="post" action="{{ url_for('pull_calendar') }}">
+    <form method="post" action="{{ url_for('pull_calendar') }}" class="js-watch-pull">
       <input type="hidden" name="view" value="{{ view }}"/>
       {% if view == 'week' %}
         <input type="hidden" name="week" value="{{ cal.week_start }}"/>
