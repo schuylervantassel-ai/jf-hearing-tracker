@@ -90,6 +90,7 @@ from comit import (
     pull_federal_register, fr_comment_period_label, FR_WORKFLOW_STATUSES,
     load_congress_config,
     pull_senate_schedule, refresh_govtrack_committee_cache,
+    repair_stored_hearing_urls,
     build_committee_ongoings, load_govtrack_cache,
     pull_session_calendar, build_session_calendar_week, build_session_calendar_month,
     load_chamber_calendar,
@@ -533,20 +534,28 @@ def _run_hearing_feed_import():
     """
     RSS + Senate hearing schedule + Congress.gov API + social.
     Kept separate from session-calendar / GovTrack pulls (those are slow).
+    Writes hearings.json once at the end to avoid slow repeated disk saves.
     """
     hearings = load_data()
     feeds = load_feeds()
     social_feeds = load_social_feeds()
-    new_rss = pull_rss_feeds(hearings, feeds, silent=True)
-    sched = pull_senate_schedule(hearings, silent=True)
+    meeting_cache = {}
+    new_rss = pull_rss_feeds(hearings, feeds, silent=True, persist=False)
+    sched = pull_senate_schedule(hearings, silent=True, persist=False)
     api_key = _load_api_key()
     api_result = (
-        pull_congress_api(hearings, api_key, silent=True)
+        pull_congress_api(
+            hearings, api_key, silent=True,
+            persist=False, meeting_cache=meeting_cache,
+        )
         if api_key
         else {"new": [], "updated": 0}
     )
     new_api = api_result.get("new", [])
     new_social = pull_social_feeds(social_feeds, silent=True)
+    repair_stored_hearing_urls(hearings)
+    save_data(hearings)
+    save_feeds(feeds)
     return {
         "new_rss": new_rss,
         "new_api": new_api,
@@ -643,7 +652,7 @@ def poll_status():
 
 def _flash_pull_started(redirect_url):
     flash(
-        "Feed refresh started in the background (usually 1–2 minutes). "
+        "Feed refresh started in the background (usually under a minute). "
         "You can keep using the site; check back shortly.",
         "info",
     )

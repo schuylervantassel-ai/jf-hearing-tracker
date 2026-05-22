@@ -525,9 +525,13 @@ def fetch_feed_raw(url):
 
 RSS_CUTOFF_DAYS = 90   # ignore feed items older than this
 
-def pull_rss_feeds(hearings, feeds, silent=False):
+def pull_rss_feeds(hearings, feeds, silent=False, persist=True):
     new_items = []
     cutoff = date.today().toordinal() - RSS_CUTOFF_DAYS
+    seen_topics = {
+        (h.get("committee"), (h.get("topic") or "").lower().strip())
+        for h in hearings
+    }
 
     for feed in feeds:
         if not feed.get("active", True):
@@ -565,8 +569,10 @@ def pull_rss_feeds(hearings, feeds, silent=False):
                     except Exception:
                         pass
 
-                if is_duplicate(hearings + new_items, title, feed["committee"]):
+                dup_key = (feed["committee"], title.lower().strip())
+                if dup_key in seen_topics:
                     continue
+                seen_topics.add(dup_key)
                 angle = detect_angle(f"{title} {summary}")
                 item_date_resolved = parse_date_str(item["date"])
                 auto_status = "Completed" if item_date_resolved < date.today().isoformat() else "Upcoming"
@@ -602,8 +608,9 @@ def pull_rss_feeds(hearings, feeds, silent=False):
                 print(f"FAILED ({e})")
             feed["last_status"] = f"Error: {e}"
 
-    save_data(hearings)
-    save_feeds(feeds)
+    if persist:
+        save_data(hearings)
+        save_feeds(feeds)
     return new_items
 
 # ── GovTrack + Senate schedule (committee on-goings) ─────────────────────────
@@ -815,7 +822,7 @@ def _fetch_senate_schedule_xml():
         return resp.read()
 
 
-def pull_senate_schedule(hearings, silent=False):
+def pull_senate_schedule(hearings, silent=False, persist=True):
     """
     Import upcoming Senate committee meetings from the official schedule XML
     (same source GovTrack uses — see govtrack.us/about-our-data).
@@ -895,8 +902,9 @@ def pull_senate_schedule(hearings, silent=False):
             new_items.append(h)
             hearings.append(h)
 
-    repair_stored_hearing_urls(hearings)
-    save_data(hearings)
+    if persist:
+        repair_stored_hearing_urls(hearings)
+        save_data(hearings)
     if not silent:
         print(f"{len(new_items)} new, {updated} updated")
     return {"new": new_items, "updated": updated}
@@ -1373,6 +1381,8 @@ CONGRESS_CONFIG_FILE = _data_path("congress_config.json")
 CONGRESS_API_BASE    = "https://api.congress.gov/v3"
 CONGRESS_API_CURRENT = 119
 CONGRESS_API_LIMIT_PER_COMMITTEE = 20
+CONGRESS_API_LIST_LIMIT = 15       # per chamber (API committee= filter is unreliable)
+CONGRESS_API_DELAY = 0.05          # ~20 req/s max during a pull
 
 # Default committee systemCode → label (overridden by congress_config.json if present)
 _DEFAULT_CONGRESS_COMMITTEES = [
@@ -1396,7 +1406,7 @@ def load_congress_config():
         cfg = {
             "congress": CONGRESS_API_CURRENT,
             "api_base": CONGRESS_API_BASE,
-            "meetings_limit_per_chamber": CONGRESS_API_LIMIT,
+            "meetings_limit_per_chamber": CONGRESS_API_LIST_LIMIT,
             "chambers": ["house", "senate"],
             "committees": _DEFAULT_CONGRESS_COMMITTEES,
         }
@@ -1411,6 +1421,10 @@ def load_congress_config():
         "api_base": cfg.get("api_base", CONGRESS_API_BASE).rstrip("/"),
         "limit_per_committee": min(
             int(cfg.get("meetings_limit_per_committee", CONGRESS_API_LIMIT_PER_COMMITTEE)),
+            50,
+        ),
+        "meetings_limit_per_chamber": min(
+            int(cfg.get("meetings_limit_per_chamber", CONGRESS_API_LIST_LIMIT)),
             50,
         ),
         "chambers": cfg.get("chambers") or ["house", "senate"],
@@ -1548,11 +1562,39 @@ def _apply_api_fields(hearing, meeting, *, committee_name, chamber, congress,
     hearing["source"] = "api"
 
 
-def pull_congress_api(hearings, api_key, silent=False):
+def _fetch_api_meeting_detail(api_base, congress, chamber, event_id, detail_url,
+                              api_key, cache):
+    """One detail fetch per event_id per pull (Congress list repeats the same ids)."""
+    if event_id in cache:
+        return cache[event_id]
+    url = detail_url or (
+        f"{api_base}/committee-meeting/{congress}/{chamber}/{event_id}?format=json"
+    )
+    time.sleep(CONGRESS_API_DELAY)
+    detail = fetch_json(url, api_key)
+    meeting = detail.get("committeeMeeting", {})
+    cache[event_id] = meeting
+    return meeting
+
+
+def _hearing_needs_api_reconcile(hearing):
+    """Only re-fetch when the stored link is missing or uses a broken legacy path."""
+    if hearing.get("source") != "api":
+        return False
+    if not hearing.get("congress_event_id"):
+        return False
+    url = hearing.get("url") or ""
+    if not url:
+        return True
+    return "/committee-meeting/" in url
+
+
+def pull_congress_api(hearings, api_key, silent=False, persist=True,
+                      meeting_cache=None):
     """
-    Pull committee meetings per tracked committee (filtered API queries).
-    Adds new hearings and updates existing rows matched by event id or title.
-    Returns {"new": [...], "updated": int}.
+    Pull recent committee meetings from Congress.gov (one list per chamber).
+    Detail payloads are cached by event_id because the API returns the same
+    recent meetings regardless of committee= query param.
     """
     empty = {"new": [], "updated": 0}
     if not api_key or not api_key.strip():
@@ -1563,139 +1605,147 @@ def pull_congress_api(hearings, api_key, silent=False):
     cfg = load_congress_config()
     congress = cfg["congress"]
     api_base = cfg["api_base"]
-    limit = cfg["limit_per_committee"]
+    list_limit = min(
+        int(cfg.get("meetings_limit_per_chamber", CONGRESS_API_LIST_LIMIT)),
+        50,
+    )
     cutoff = date.today().toordinal() - RSS_CUTOFF_DAYS
+    codes = cfg["committee_codes"]
+    cache = meeting_cache if meeting_cache is not None else {}
+    # Senate schedule XML already fills tracked Senate meetings; skip duplicate API work.
+    schedule_event_ids = {
+        str(h.get("congress_event_id"))
+        for h in hearings
+        if h.get("source") == "schedule" and h.get("congress_event_id")
+    }
 
     new_items = []
     updated_count = 0
     changed = False
+    seen_list_ids = set()
 
-    for entry in cfg.get("committees") or []:
-        system_code = entry.get("system_code", "")
-        committee_name = entry.get("label") or cfg["committee_codes"].get(system_code)
-        chamber = entry.get("chamber") or _chamber_for_system_code(system_code)
-        if not system_code or not committee_name or not chamber:
-            continue
+    if not silent:
+        print("  Congress.gov API ... ", end="", flush=True)
 
-        if not silent:
-            print(f"  Congress.gov API ({committee_name}) ... ", end="", flush=True)
-        added = 0
-        upd = 0
+    for chamber in cfg.get("chambers") or ["house", "senate"]:
         try:
             list_url = (
                 f"{api_base}/committee-meeting/{congress}/{chamber}"
-                f"?committee={system_code}&limit={limit}&sort=updateDate+desc"
+                f"?limit={list_limit}&sort=updateDate+desc"
             )
             data = fetch_json(list_url, api_key)
             meetings = data.get("committeeMeetings", [])
+        except Exception:
+            continue
 
-            for mtg in meetings:
-                event_id = str(mtg.get("eventId", ""))
-                detail_url = mtg.get("url", "")
-                if not event_id or not detail_url:
-                    continue
+        for mtg in meetings:
+            event_id = str(mtg.get("eventId", ""))
+            if not event_id or event_id in seen_list_ids:
+                continue
+            seen_list_ids.add(event_id)
+            if chamber == "senate" and event_id in schedule_event_ids:
+                continue
 
-                try:
-                    time.sleep(0.08)
-                    detail = fetch_json(detail_url, api_key)
-                    meeting = detail.get("committeeMeeting", {})
-                except Exception:
-                    continue
-
-                resolved_committee = _resolve_tracked_committee(
-                    meeting, cfg["committee_codes"]
+            try:
+                meeting = _fetch_api_meeting_detail(
+                    api_base, congress, chamber, event_id,
+                    mtg.get("url", ""), api_key, cache,
                 )
-                if not resolved_committee or resolved_committee != committee_name:
+            except Exception:
+                continue
+
+            resolved_committee = _resolve_tracked_committee(meeting, codes)
+            if not resolved_committee:
+                continue
+
+            meeting_date, date_tentative = _parse_meeting_date_from_api(meeting)
+            try:
+                if date.fromisoformat(meeting_date).toordinal() < cutoff:
                     continue
+            except Exception:
+                pass
 
-                meeting_date, date_tentative = _parse_meeting_date_from_api(meeting)
-                try:
-                    if date.fromisoformat(meeting_date).toordinal() < cutoff:
-                        continue
-                except Exception:
-                    pass
-
-                title = (meeting.get("title") or "").strip()
-                if not title:
-                    title = f"{committee_name} – {meeting.get('type') or 'Meeting'}"
-
-                existing = _find_hearing_for_api(
-                    hearings, event_id, committee_name, title
+            title = (meeting.get("title") or "").strip()
+            if not title:
+                title = (
+                    f"{resolved_committee} – {meeting.get('type') or 'Meeting'}"
                 )
-                if existing:
-                    _apply_api_fields(
-                        existing, meeting,
-                        committee_name=committee_name,
-                        chamber=chamber,
-                        congress=congress,
-                        event_id=event_id,
-                        meeting_date=meeting_date,
-                        date_tentative=date_tentative,
-                    )
-                    upd += 1
-                    changed = True
-                    continue
 
-                h = {
-                    "id": next_id(hearings + new_items),
-                    "action": "Monitor only",
-                    "questions": "",
-                    "created": datetime.now().strftime("%Y-%m-%d"),
-                }
+            existing = _find_hearing_for_api(
+                hearings, event_id, resolved_committee, title
+            )
+            if existing:
                 _apply_api_fields(
-                    h, meeting,
-                    committee_name=committee_name,
+                    existing, meeting,
+                    committee_name=resolved_committee,
                     chamber=chamber,
                     congress=congress,
                     event_id=event_id,
                     meeting_date=meeting_date,
                     date_tentative=date_tentative,
                 )
-                new_items.append(h)
-                hearings.append(h)
-                added += 1
+                updated_count += 1
                 changed = True
+                continue
 
-            updated_count += upd
-            if not silent:
-                print(f"{added} new, {upd} updated")
-        except Exception as e:
-            if not silent:
-                print(f"FAILED ({e})")
+            h = {
+                "id": next_id(hearings + new_items),
+                "action": "Monitor only",
+                "questions": "",
+                "created": datetime.now().strftime("%Y-%m-%d"),
+            }
+            _apply_api_fields(
+                h, meeting,
+                committee_name=resolved_committee,
+                chamber=chamber,
+                congress=congress,
+                event_id=event_id,
+                meeting_date=meeting_date,
+                date_tentative=date_tentative,
+            )
+            new_items.append(h)
+            hearings.append(h)
+            changed = True
 
-    if api_key and api_key.strip():
-        reconcile_api_hearings(hearings, api_key, cfg, silent=silent)
+    stale = [h for h in hearings if _hearing_needs_api_reconcile(h)]
+    if stale:
+        reconcile_api_hearings(
+            hearings, api_key, cfg, silent=silent,
+            meeting_cache=cache, persist=False,
+        )
+        changed = True
 
-    if changed:
+    if not silent:
+        print(f"{len(new_items)} new, {updated_count} updated")
+
+    if changed and persist:
         save_data(hearings)
     return {"new": new_items, "updated": updated_count}
 
 
-def reconcile_api_hearings(hearings, api_key, cfg, silent=False):
+def reconcile_api_hearings(hearings, api_key, cfg, silent=False,
+                           meeting_cache=None, persist=True):
     """
-    Re-fetch Congress.gov API rows to fix broken /committee-meeting/ links and
-    committee labels polluted by event-id collisions across committees.
+    Re-fetch only API rows that still have broken legacy Congress.gov URLs.
     """
     congress = cfg["congress"]
     api_base = cfg["api_base"]
     codes = cfg["committee_codes"]
+    cache = meeting_cache if meeting_cache is not None else {}
     changed = 0
+
     for h in hearings:
-        if h.get("source") != "api":
+        if not _hearing_needs_api_reconcile(h):
             continue
         event_id = str(h.get("congress_event_id") or "").strip()
-        if not event_id:
-            continue
         chamber = _chamber_slug(
             "senate" if "Senate" in (h.get("committee") or "") else "house"
         )
         try:
-            time.sleep(0.08)
-            detail = fetch_json(
-                f"{api_base}/committee-meeting/{congress}/{chamber}/{event_id}",
-                api_key,
+            meeting = _fetch_api_meeting_detail(
+                api_base, congress, chamber, event_id, "",
+                api_key, cache,
             )
-            meeting = detail.get("committeeMeeting", {})
         except Exception:
             continue
 
@@ -1720,7 +1770,7 @@ def reconcile_api_hearings(hearings, api_key, cfg, silent=False):
                 h["committee"] = "Other"
                 changed += 1
 
-    if changed:
+    if changed and persist:
         save_data(hearings)
         if not silent:
             print(f"  Congress.gov API reconcile: {changed} record(s) corrected")
