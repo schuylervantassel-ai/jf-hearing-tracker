@@ -683,36 +683,56 @@ def _congress_event_page_url(congress, chamber, event_id):
 
 
 def _urls_from_api_videos(meeting):
-    """Pick the best public link from API meeting videos (ISVP preferred for Senate)."""
-    senate_stream = ""
+    """Prefer Congress.gov event pages from API videos; ISVP is a last resort."""
     congress_event = ""
+    senate_stream = ""
     fallback = ""
     for v in (meeting or {}).get("videos") or []:
         u = normalize_external_url(v.get("url") or "")
         if not u or "api.congress.gov" in u:
             continue
-        if "senate.gov" in u:
-            senate_stream = u
-        elif "congress.gov/event" in u:
+        if "congress.gov/event" in u:
             congress_event = u
+        elif "senate.gov/isvp" in u or "senate.gov" in u:
+            senate_stream = u
         elif not fallback and "congress.gov" not in u:
             fallback = u
-    return senate_stream or congress_event or fallback
+    return congress_event or senate_stream or fallback
 
 
 def _congress_api_meeting_url(meeting, congress, chamber, event_id):
-    """Use video/stream URLs from the API; fall back to Congress.gov event page."""
-    from_videos = _urls_from_api_videos(meeting)
-    if from_videos:
-        return from_videos
+    """
+    Congress.gov event page for API imports (hearing details, documents).
+    Senate ISVP stream links are only used when no event page is available.
+    """
+    congress_event = ""
+    senate_stream = ""
+    for v in (meeting or {}).get("videos") or []:
+        u = normalize_external_url(v.get("url") or "")
+        if not u or "api.congress.gov" in u:
+            continue
+        if "congress.gov/event" in u:
+            congress_event = u
+        elif "senate.gov/isvp" in u or "senate.gov" in u:
+            senate_stream = u
+    if congress_event:
+        return congress_event
+    if event_id:
+        return _congress_event_page_url(congress, chamber, event_id)
+    for key in ("url", "meetingUrl", "webLink"):
+        raw = normalize_external_url((meeting or {}).get(key) or "")
+        if not raw or "api.congress.gov" in raw:
+            continue
+        if "congress.gov/event" in raw:
+            return raw
+    if senate_stream:
+        return senate_stream
     for key in ("url", "meetingUrl", "webLink"):
         raw = normalize_external_url((meeting or {}).get(key) or "")
         if not raw or "api.congress.gov" in raw:
             continue
         if any(host in raw for host in ("congress.gov", "house.gov", "senate.gov")):
             return raw
-    if event_id:
-        return _congress_event_page_url(congress, chamber, event_id)
     return ""
 
 
@@ -733,6 +753,14 @@ def repair_stored_hearing_urls(hearings):
             m = _LEGACY_CONGRESS_MTG_RE.match(new or old)
             if m:
                 new = _congress_event_page_url(m.group(1), m.group(2), m.group(3))
+            elif h.get("congress_event_id") and "senate.gov/isvp" in (new or old):
+                cfg = load_congress_config()
+                ch = _chamber_slug(
+                    "senate" if "Senate" in (h.get("committee") or "") else "house"
+                )
+                new = _congress_event_page_url(
+                    cfg["congress"], ch, str(h["congress_event_id"])
+                )
         if new and new != old:
             h["url"] = new
             changed += 1
@@ -1586,7 +1614,11 @@ def _hearing_needs_api_reconcile(hearing):
     url = hearing.get("url") or ""
     if not url:
         return True
-    return "/committee-meeting/" in url
+    if "/committee-meeting/" in url:
+        return True
+    if "senate.gov/isvp" in url:
+        return True
+    return False
 
 
 def pull_congress_api(hearings, api_key, silent=False, persist=True,
