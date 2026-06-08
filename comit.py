@@ -16,7 +16,7 @@ import ssl
 import sys
 from html import unescape
 from datetime import datetime, date
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 import time
@@ -650,6 +650,33 @@ def normalize_external_url(url):
     if url.startswith("http://"):
         url = "https://" + url[7:]
     return url
+
+
+def hearing_google_search_url(hearing):
+    """Google search fallback when the stored API/RSS link is wrong or missing."""
+    parts = []
+    committee = (hearing.get("committee") or "").split("(")[0].strip()
+    if committee and committee.lower() != "other":
+        parts.append(committee)
+
+    topic = (hearing.get("topic") or "").strip()
+    if topic:
+        snippet = topic if len(topic) <= 120 else topic[:117] + "..."
+        parts.append(f'"{snippet}"' if " " in snippet else snippet)
+
+    date_str = hearing.get("date") or ""
+    if date_str:
+        try:
+            parts.append(date.fromisoformat(date_str).strftime("%B %d %Y"))
+        except ValueError:
+            parts.append(date_str)
+
+    event_id = hearing.get("congress_event_id")
+    if event_id:
+        parts.append(f"congress.gov event {event_id}")
+
+    parts.append("site:congress.gov OR site:senate.gov OR site:house.gov")
+    return f"https://www.google.com/search?q={quote_plus(' '.join(parts))}"
 
 
 def _senate_schedule_meeting_url(video_url, congress, event_id):
