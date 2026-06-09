@@ -1,4 +1,5 @@
 # Render Blueprint — deploy from repo root (hearing-tracker folder as Git root).
+# Build: 2026-06-08 (alternate Congress.gov event links)
 # Dashboard: New → Blueprint → connect repo, or apply this file on an existing service.
 #
 # Persistent disk requires a paid plan (Starter ~$7/mo). See RENDER.md for a free-tier demo.
