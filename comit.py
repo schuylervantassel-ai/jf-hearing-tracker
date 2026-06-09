@@ -652,31 +652,111 @@ def normalize_external_url(url):
     return url
 
 
-def hearing_google_search_url(hearing):
-    """Google search fallback when the stored API/RSS link is wrong or missing."""
+_CONGRESS_EVENT_IN_URL_RE = re.compile(
+    r"congress\.gov/event/(\d+)th-Congress/(house|senate)-event/(\d+)",
+    re.I,
+)
+_CHAMBER_IN_URL_RE = re.compile(r"/(house|senate)-event/", re.I)
+_TOPIC_BOILERPLATE_RE = re.compile(
+    r"^(hearings?\s+to\s+examine|markup\s+of|open\s+hearing:?\s*|"
+    r"closed\s+hearing:?\s*|budget\s+hearing\s*[–-]\s*)",
+    re.I,
+)
+
+
+def _infer_congress_number(hearing):
+    url = hearing.get("url") or ""
+    m = _CONGRESS_EVENT_IN_URL_RE.search(url)
+    if m:
+        return int(m.group(1))
+    return load_congress_config().get("congress", 119)
+
+
+def _infer_hearing_chamber(hearing):
+    stored = (hearing.get("congress_chamber") or "").lower()
+    if stored in ("house", "senate"):
+        return stored
+
+    committee = hearing.get("committee") or ""
+    low = committee.lower()
+    if low.startswith("senate"):
+        return "senate"
+    if low.startswith("house"):
+        return "house"
+
+    url = hearing.get("url") or ""
+    m = _CHAMBER_IN_URL_RE.search(url)
+    if m:
+        return m.group(1).lower()
+
+    cfg = load_congress_config()
+    for entry in cfg.get("committees", []):
+        if entry.get("label") == committee:
+            return (entry.get("chamber") or "").lower()
+
+    if hearing.get("source") == "schedule":
+        return "senate"
+    return ""
+
+
+def _congress_gov_search_url(query_parts):
+    query = " ".join(p for p in query_parts if p).strip()
+    if not query:
+        return ""
+    return f"https://www.congress.gov/search?q={quote_plus(query)}"
+
+
+def _hearing_search_keywords(hearing):
+    """Short keywords for Congress.gov search when no event id is available."""
     parts = []
     committee = (hearing.get("committee") or "").split("(")[0].strip()
     if committee and committee.lower() != "other":
         parts.append(committee)
 
-    topic = (hearing.get("topic") or "").strip()
+    topic = _TOPIC_BOILERPLATE_RE.sub("", (hearing.get("topic") or "").strip())
     if topic:
-        snippet = topic if len(topic) <= 120 else topic[:117] + "..."
-        parts.append(f'"{snippet}"' if " " in snippet else snippet)
+        words = re.split(r"[\s;,]+", topic)
+        parts.extend(w for w in words[:8] if len(w) > 2 and not w.startswith("H.R."))
 
     date_str = hearing.get("date") or ""
     if date_str:
         try:
-            parts.append(date.fromisoformat(date_str).strftime("%B %d %Y"))
+            parts.append(date.fromisoformat(date_str).strftime("%Y-%m-%d"))
         except ValueError:
             parts.append(date_str)
+    return parts
 
-    event_id = hearing.get("congress_event_id")
+
+def _build_hearing_alternate_url(hearing):
+    """Best-effort link to the committee event when the primary URL is wrong."""
+    event_id = str(hearing.get("congress_event_id") or "").strip()
     if event_id:
-        parts.append(f"congress.gov event {event_id}")
+        chamber = _infer_hearing_chamber(hearing)
+        if chamber:
+            congress = _infer_congress_number(hearing)
+            return _congress_event_page_url(congress, chamber, event_id)
 
-    parts.append("site:congress.gov OR site:senate.gov OR site:house.gov")
-    return f"https://www.google.com/search?q={quote_plus(' '.join(parts))}"
+    return _congress_gov_search_url(_hearing_search_keywords(hearing))
+
+
+def hearing_alternate_url(hearing):
+    """Alternate event link; omitted when it would duplicate the primary URL."""
+    alt = _build_hearing_alternate_url(hearing)
+    if not alt:
+        return ""
+    primary = normalize_external_url(hearing.get("url") or "")
+    if primary and alt.rstrip("/") == primary.rstrip("/"):
+        return ""
+    return alt
+
+
+def hearing_alternate_label(hearing):
+    if not hearing_alternate_url(hearing):
+        return ""
+    event_id = str(hearing.get("congress_event_id") or "").strip()
+    if event_id and _infer_hearing_chamber(hearing):
+        return "Alternate: Congress.gov event ↗"
+    return "Alternate: search Congress.gov ↗"
 
 
 def _senate_schedule_meeting_url(video_url, congress, event_id):
@@ -932,6 +1012,7 @@ def pull_senate_schedule(hearings, silent=False, persist=True):
             hearing["notes"] = notes
             hearing["url"] = _senate_schedule_meeting_url(video, congress, event_id)
             hearing["congress_event_id"] = event_id
+            hearing["congress_chamber"] = "senate"
             hearing["source"] = "schedule"
             hearing["angle"] = detect_angle(title)
             updated += 1
@@ -951,6 +1032,7 @@ def pull_senate_schedule(hearings, silent=False, persist=True):
                 "notes": notes,
                 "url": _senate_schedule_meeting_url(video, congress, event_id),
                 "congress_event_id": event_id,
+                "congress_chamber": "senate",
                 "source": "schedule",
                 "created": date.today().isoformat(),
             }
@@ -1614,6 +1696,7 @@ def _apply_api_fields(hearing, meeting, *, committee_name, chamber, congress,
     hearing["notes"] = notes.strip("; ")
     hearing["url"] = _congress_api_meeting_url(meeting, congress, chamber, event_id)
     hearing["congress_event_id"] = event_id
+    hearing["congress_chamber"] = _chamber_slug(chamber)
     hearing["source"] = "api"
 
 

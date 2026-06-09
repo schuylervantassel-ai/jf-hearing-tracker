@@ -104,10 +104,10 @@
                     </p>
                   </a>
                   <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="text-[10px] text-blue-600 hover:underline mt-0.5 inline-block">Tracker record</a>
-                  {% if h.get('source') == 'api' %}
+                  {% if hearing_alternate_url(h) %}
                     <span class="text-slate-300 mx-1">·</span>
-                    <a href="{{ hearing_google_search_url(h) }}" target="_blank" rel="noopener"
-                       class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">Google search ↗</a>
+                    <a href="{{ hearing_alternate_url(h) }}" target="_blank" rel="noopener"
+                       class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">{{ hearing_alternate_label(h) or 'Alternate ↗' }}</a>
                   {% endif %}
                 {% else %}
                   <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
@@ -139,9 +139,9 @@
                     <p class="text-sm text-slate-700 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
                     <span class="inline-block mt-1 text-xs px-1.5 py-0.5 rounded {{ status_cls(h.status) }}">{{ h.status }}</span>
                   </a>
-                  {% if h.get('source') == 'api' %}
-                    <a href="{{ hearing_google_search_url(h) }}" target="_blank" rel="noopener"
-                       class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">Google search ↗</a>
+                  {% if hearing_alternate_url(h) %}
+                    <a href="{{ hearing_alternate_url(h) }}" target="_blank" rel="noopener"
+                       class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">{{ hearing_alternate_label(h) or 'Alternate ↗' }}</a>
                   {% endif %}
                 {% else %}
                   <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
