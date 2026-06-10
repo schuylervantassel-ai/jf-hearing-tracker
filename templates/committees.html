@@ -93,9 +93,10 @@
           <ul class="space-y-3">
             {% for h in sec.upcoming %}
               {% set da = days_away(h.date) %}
+              {% set link_url = hearing_committee_url(h) or h.get('url') %}
               <li>
-                {% if h.url %}
-                  <a href="{{ h.url }}" target="_blank" rel="noopener" class="block group">
+                {% if link_url %}
+                  <a href="{{ link_url }}" target="_blank" rel="noopener" class="block group">
                     <p class="text-sm font-medium text-slate-800 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
                     <p class="text-xs text-slate-500 mt-0.5">
                       {{ h.date }}
@@ -138,9 +139,10 @@
         {% if sec.recent %}
           <ul class="space-y-3">
             {% for h in sec.recent %}
+              {% set link_url = hearing_committee_url(h) or h.get('url') %}
               <li>
-                {% if h.url %}
-                  <a href="{{ h.url }}" target="_blank" rel="noopener" class="block group">
+                {% if link_url %}
+                  <a href="{{ link_url }}" target="_blank" rel="noopener" class="block group">
                     <p class="text-sm text-slate-700 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
                     <span class="inline-block mt-1 text-xs px-1.5 py-0.5 rounded {{ status_cls(h.status) }}">{{ h.status }}</span>
                   </a>
