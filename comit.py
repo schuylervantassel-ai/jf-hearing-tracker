@@ -674,6 +674,9 @@ def hearing_committee_url(hearing):
     url = normalize_external_url(hearing.get("url") or "")
     if _is_committee_site_url(url):
         return url
+    hearings_page = _committee_hearings_page_url(hearing.get("committee") or "")
+    if hearings_page:
+        return hearings_page
     return ""
 
 def _make_ssl_context():
@@ -873,6 +876,16 @@ def _committee_site_urls(cfg=None):
         if label and site:
             urls[label] = site
     return urls
+
+
+def _committee_hearings_page_url(committee_label):
+    """Committee /hearings/ index — reliable when Congress.gov event pages are missing."""
+    if not committee_label or committee_label == "Other":
+        return ""
+    base = (_committee_site_urls().get(committee_label) or "").rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/hearings/"
 
 
 def normalize_external_url(url):
@@ -1163,22 +1176,18 @@ def repair_stored_hearing_urls(hearings):
         elif h.get("source") in ("api", "rss+api", "schedule+api"):
             if h.get("rss_url"):
                 continue
-            if h.get("source") == "schedule+api" and h.get("congress_url"):
-                if new != normalize_external_url(h["congress_url"]):
-                    h["url"] = normalize_external_url(h["congress_url"])
-                    changed += 1
-                continue
-            m = _LEGACY_CONGRESS_MTG_RE.match(new or old)
-            if m:
-                new = _congress_event_page_url(m.group(1), m.group(2), m.group(3))
-            elif h.get("congress_event_id") and "senate.gov/isvp" in (new or old):
-                cfg = load_congress_config()
-                ch = _chamber_slug(
-                    "senate" if "Senate" in (h.get("committee") or "") else "house"
-                )
-                new = _congress_event_page_url(
-                    cfg["congress"], ch, str(h["congress_event_id"])
-                )
+            if "senate.gov/isvp" in (new or old):
+                pass
+            else:
+                committee_page = _committee_hearings_page_url(h.get("committee"))
+                if committee_page:
+                    new = committee_page
+                elif h.get("source") == "schedule+api" and h.get("congress_url"):
+                    new = normalize_external_url(h["congress_url"])
+                else:
+                    m = _LEGACY_CONGRESS_MTG_RE.match(new or old)
+                    if m:
+                        new = _congress_event_page_url(m.group(1), m.group(2), m.group(3))
         if new and new != old:
             h["url"] = new
             changed += 1
@@ -2035,10 +2044,16 @@ def _apply_api_fields(hearing, meeting, *, committee_name, chamber, congress,
         hearing["url"] = rss_url
         hearing["source"] = "rss+api"
     elif prior_source in ("schedule", "schedule+api"):
-        hearing["url"] = congress_url or normalize_external_url(hearing.get("url") or "")
+        existing = normalize_external_url(hearing.get("url") or "")
+        if "senate.gov/isvp" in existing or _is_committee_site_url(existing):
+            hearing["url"] = existing
+        else:
+            committee_page = _committee_hearings_page_url(committee_name)
+            hearing["url"] = committee_page or congress_url or existing
         hearing["source"] = "schedule+api"
     else:
-        hearing["url"] = congress_url
+        committee_page = _committee_hearings_page_url(committee_name)
+        hearing["url"] = committee_page or congress_url
         hearing["source"] = "api"
 
 
