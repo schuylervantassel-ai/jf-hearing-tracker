@@ -759,6 +759,36 @@ def hearing_alternate_label(hearing):
     return "Alternate: search Congress.gov ↗"
 
 
+def _build_hearing_google_search_url(hearing):
+    """Broader web search fallback (third option after primary + Congress.gov)."""
+    parts = list(_hearing_search_keywords(hearing))
+    event_id = str(hearing.get("congress_event_id") or "").strip()
+    if event_id:
+        parts.append(event_id)
+    if not parts:
+        topic = (hearing.get("topic") or "").strip()
+        if topic:
+            parts.append(topic[:80])
+    if not parts:
+        return ""
+    parts.append("site:congress.gov OR site:senate.gov OR site:house.gov")
+    return f"https://www.google.com/search?q={quote_plus(' '.join(parts))}"
+
+
+def hearing_google_search_url(hearing):
+    """Google search link; omitted when it duplicates primary or Congress.gov alternate."""
+    url = _build_hearing_google_search_url(hearing)
+    if not url:
+        return ""
+    primary = normalize_external_url(hearing.get("url") or "")
+    alt = hearing_alternate_url(hearing)
+    if primary and url.rstrip("/") == primary.rstrip("/"):
+        return ""
+    if alt and url.rstrip("/") == alt.rstrip("/"):
+        return ""
+    return url
+
+
 def _senate_schedule_meeting_url(video_url, congress, event_id):
     """Prefer Senate ISVP stream/page from schedule XML over Congress.gov."""
     video = normalize_external_url(video_url)

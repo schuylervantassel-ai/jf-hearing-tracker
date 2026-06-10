@@ -109,6 +109,11 @@
                     <a href="{{ hearing_alternate_url(h) }}" target="_blank" rel="noopener"
                        class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">{{ hearing_alternate_label(h) or 'Alternate ↗' }}</a>
                   {% endif %}
+                  {% if hearing_google_search_url(h) %}
+                    <span class="text-slate-300 mx-1">·</span>
+                    <a href="{{ hearing_google_search_url(h) }}" target="_blank" rel="noopener"
+                       class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">Google ↗</a>
+                  {% endif %}
                 {% else %}
                   <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
                     <p class="text-sm font-medium text-slate-800 group-hover:text-blue-600 line-clamp-2">{{ h.topic }}</p>
@@ -142,6 +147,11 @@
                   {% if hearing_alternate_url(h) %}
                     <a href="{{ hearing_alternate_url(h) }}" target="_blank" rel="noopener"
                        class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">{{ hearing_alternate_label(h) or 'Alternate ↗' }}</a>
+                  {% endif %}
+                  {% if hearing_google_search_url(h) %}
+                    <span class="text-slate-300 mx-1">·</span>
+                    <a href="{{ hearing_google_search_url(h) }}" target="_blank" rel="noopener"
+                       class="text-[10px] text-slate-500 hover:text-blue-600 mt-0.5 inline-block">Google ↗</a>
                   {% endif %}
                 {% else %}
                   <a href="{{ url_for('hearing_detail', hid=h.id) }}" class="block group">
