@@ -419,6 +419,100 @@ def parse_date_str(date_str):
 def clean_html(text):
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
+TRACKED_COMMITTEES = [c for c in COMMITTEES if c != "Other"]
+
+_RSS_NOISE_TITLE_RE = re.compile(
+    r"(?:^|\b)(?:event list|hearings\s*\||roundtable discussion|roundtable event|"
+    r"votes to release transcripts|releases transcripts|released transcripts|"
+    r"business meeting to consider|"
+    r"delivers opening statement|deliver opening statement|opening statement at|"
+    r"opens hearing on|announces (?:open |full |public )?hearing|"
+    r"media advisory|icymi|new date \d|statement on|"
+    r"hosts? (?:a |an )?roundtable|appeared first on|chairman .+ hosts? )",
+    re.I,
+)
+_RSS_NOISE_URL_RE = re.compile(
+    r"(eventslisting\.aspx|default\.aspx\?EventTypeID|govinfo\.gov|/feed/?$)",
+    re.I,
+)
+_HEARING_SIGNAL_RE = re.compile(
+    r"(hearing|briefing|markup|nomination|meeting to receive testimony|"
+    r"subcommittee hearing|full committee hearing|open session|closed session|"
+    r"worldwide threats|posture of the)",
+    re.I,
+)
+
+
+def _looks_like_hearing_event(title, url, summary=""):
+    """True when an RSS item is a schedulable hearing, not news or a calendar index."""
+    title = title or ""
+    url = (url or "").lower()
+    blob = f"{title} {summary}"
+    if "govinfo.gov" in url:
+        return False
+    if _RSS_NOISE_TITLE_RE.search(title):
+        return False
+    if _RSS_NOISE_URL_RE.search(url):
+        return False
+    if _HEARING_SIGNAL_RE.search(blob):
+        return True
+    if re.search(r"/(open|closed)[-_]hearing", url, re.I):
+        return True
+    if "eventsingle.aspx" in url:
+        return True
+    return False
+
+
+def _should_skip_rss_item(title, url, summary, committee):
+    """Drop calendar indexes, press releases, GovInfo archives, and off-list committees."""
+    if committee == "Multiple" or "govinfo.gov" in (url or "").lower():
+        return True
+    if committee and committee not in TRACKED_COMMITTEES:
+        inferred = _committee_from_item_url(url)
+        if not inferred or inferred not in TRACKED_COMMITTEES:
+            return True
+    return not _looks_like_hearing_event(title, url, summary)
+
+
+def _hearing_is_noise(hearing):
+    """Records that should not appear in the tracker (not findable as live events)."""
+    if (hearing.get("source") or "") == "manual":
+        return False
+    title = hearing.get("topic") or ""
+    url = (hearing.get("url") or "").lower()
+    committee = hearing.get("committee") or ""
+    if committee == "Multiple" or "govinfo.gov" in url:
+        return True
+    if committee == "Other" and (hearing.get("source") or "").startswith(("api", "schedule")):
+        return True
+    if committee and committee not in TRACKED_COMMITTEES:
+        return True
+    if (hearing.get("source") or "") == "rss" and _should_skip_rss_item(
+        title, url, hearing.get("notes") or "", committee,
+    ):
+        return True
+    return False
+
+
+def prune_hearing_noise(hearings):
+    """Remove imported noise; returns number of rows dropped."""
+    before = len(hearings)
+    kept = [h for h in hearings if not _hearing_is_noise(h)]
+    removed = before - len(kept)
+    hearings[:] = kept
+    return removed
+
+
+def _is_api_meeting_importable(meeting, date_tentative, *, creating_new):
+    """Congress.gov rows without real dates become phantom events — skip new ones."""
+    status = (meeting.get("status") or "").strip().lower()
+    if status in ("canceled", "cancelled"):
+        return False
+    if creating_new and date_tentative:
+        return False
+    return True
+
+
 def _congress_year(n):
     """Return the start year of the Nth Congress (119th → 2025)."""
     return 2025 - 2 * (119 - n)
@@ -693,6 +787,8 @@ def pull_rss_feeds(hearings, feeds, silent=False, persist=True):
                 item_url = normalize_external_url(item.get("url", ""))
                 item_committee = _resolve_rss_committee(feed["committee"], item_url)
                 if not item_committee:
+                    continue
+                if _should_skip_rss_item(title, item_url, summary, item_committee):
                     continue
                 item_date_resolved = parse_date_str(item["date"])
                 dup_key = (item_committee, title.lower().strip())
@@ -1086,6 +1182,9 @@ def repair_stored_hearing_urls(hearings):
         if new and new != old:
             h["url"] = new
             changed += 1
+    removed = prune_hearing_noise(hearings)
+    if removed:
+        changed += removed
     if changed:
         save_data(hearings)
     return changed
@@ -2053,6 +2152,10 @@ def pull_congress_api(hearings, api_key, silent=False, persist=True,
             existing = _find_hearing_for_api(
                 hearings, event_id, resolved_committee, title, meeting_date,
             )
+            if not existing and not _is_api_meeting_importable(
+                meeting, date_tentative, creating_new=True,
+            ):
+                continue
             if existing:
                 _apply_api_fields(
                     existing, meeting,

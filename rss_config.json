@@ -41,9 +41,9 @@
     "name": "GovInfo - All Congressional Hearings",
     "url": "https://www.govinfo.gov/rss/chrg.xml",
     "committee": "Multiple",
-    "active": true,
+    "active": false,
     "last_fetched": "2026-05-21 13:05",
-    "last_status": "OK"
+    "last_status": "Disabled — published transcripts, not schedulable events"
   },
   {
     "name": "Senate Armed Services (SASC) \u2014 rss.app",

@@ -91,6 +91,7 @@ from comit import (
     load_congress_config,
     pull_senate_schedule, refresh_govtrack_committee_cache,
     repair_stored_hearing_urls,
+    prune_hearing_noise,
     hearing_alternate_url,
     hearing_alternate_label,
     hearing_google_search_url,
@@ -562,6 +563,7 @@ def _run_hearing_feed_import():
     new_api = api_result.get("new", [])
     new_social = pull_social_feeds(social_feeds, silent=True)
     repair_stored_hearing_urls(hearings)
+    prune_hearing_noise(hearings)
     save_data(hearings)
     save_feeds(feeds)
     return {
