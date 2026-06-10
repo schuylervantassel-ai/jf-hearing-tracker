@@ -481,15 +481,74 @@ def _is_committee_site_url(url):
     ))
 
 
-def _find_hearing_for_rss(hearings, committee, title):
-    """Match RSS items to existing rows (fuzzy title match like API import)."""
+def _titles_match(a, b):
+    """Conservative fuzzy title match — avoids short-substring false positives."""
+    a = (a or "").lower().strip()
+    b = (b or "").lower().strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if len(shorter) < 24:
+        return False
+    return shorter in longer
+
+
+def _committee_from_item_url(url):
+    """Infer tracked committee label from a committee-site URL hostname."""
+    url = normalize_external_url(url or "").lower()
+    if not url:
+        return ""
+    cfg = load_congress_config()
+    best = ""
+    for entry in cfg.get("committees") or []:
+        site = (entry.get("site_url") or "").lower().rstrip("/")
+        if not site:
+            continue
+        host = site.split("//", 1)[-1]
+        if host in url:
+            if len(host) > len(best):
+                best = entry.get("label", "")
+    return best
+
+
+def _resolve_rss_committee(feed_committee, item_url):
+    """Prefer committee implied by the item URL over a misconfigured feed label."""
+    inferred = _committee_from_item_url(item_url)
+    if inferred:
+        return inferred
+    if feed_committee and feed_committee != "Multiple":
+        return feed_committee
+    return ""
+
+
+def _find_hearing_by_event_id(hearings, event_id):
+    event_id = str(event_id or "").strip()
+    if not event_id:
+        return None
+    for h in hearings:
+        if str(h.get("congress_event_id") or "") == event_id:
+            return h
+    return None
+
+
+def _find_hearing_for_rss(hearings, committee, title, item_date=None):
+    """Match RSS items to existing API/schedule rows and vice versa."""
     title_lower = title.lower().strip()
     for h in hearings:
         if h.get("committee") != committee:
             continue
-        ht = (h.get("topic") or "").lower().strip()
-        if ht == title_lower or title_lower in ht or ht in title_lower:
+        if _titles_match(h.get("topic"), title):
             return h
+    if item_date:
+        for h in hearings:
+            if h.get("committee") != committee or h.get("date") != item_date:
+                continue
+            if h.get("rss_url"):
+                continue
+            if h.get("source") in ("api", "schedule", "schedule+api", "rss+api"):
+                return h
     return None
 
 
@@ -498,11 +557,17 @@ def _attach_rss_link(hearing, rss_url):
     rss_url = normalize_external_url(rss_url or "")
     if not rss_url or not _is_committee_site_url(rss_url):
         return False
+    inferred = _committee_from_item_url(rss_url)
+    if inferred:
+        hearing["committee"] = inferred
     hearing["rss_url"] = rss_url
     hearing["url"] = rss_url
-    if hearing.get("source") == "api":
+    src = hearing.get("source") or ""
+    if src in ("api", "schedule+api"):
         hearing["source"] = "rss+api"
-    elif hearing.get("source") not in ("rss+api", "rss"):
+    elif src == "schedule":
+        hearing["source"] = "rss+api"
+    elif src not in ("rss+api", "rss"):
         hearing["source"] = "rss"
     return True
 
@@ -625,9 +690,15 @@ def pull_rss_feeds(hearings, feeds, silent=False, persist=True):
                     except Exception:
                         pass
 
-                dup_key = (feed["committee"], title.lower().strip())
                 item_url = normalize_external_url(item.get("url", ""))
-                existing = _find_hearing_for_rss(hearings + new_items, feed["committee"], title)
+                item_committee = _resolve_rss_committee(feed["committee"], item_url)
+                if not item_committee:
+                    continue
+                item_date_resolved = parse_date_str(item["date"])
+                dup_key = (item_committee, title.lower().strip())
+                existing = _find_hearing_for_rss(
+                    hearings + new_items, item_committee, title, item_date_resolved,
+                )
                 if existing:
                     if _attach_rss_link(existing, item_url):
                         updated += 1
@@ -637,12 +708,11 @@ def pull_rss_feeds(hearings, feeds, silent=False, persist=True):
                     continue
                 seen_topics.add(dup_key)
                 angle = detect_angle(f"{title} {summary}")
-                item_date_resolved = parse_date_str(item["date"])
                 auto_status = "Completed" if item_date_resolved < date.today().isoformat() else "Upcoming"
                 h = {
                     "id":        next_id(hearings + new_items),
                     "date":      item_date_resolved,
-                    "committee": feed["committee"],
+                    "committee": item_committee,
                     "topic":     title,
                     "witnesses": "",
                     "angle":     angle,
@@ -761,7 +831,7 @@ def _infer_hearing_chamber(hearing):
         if entry.get("label") == committee:
             return (entry.get("chamber") or "").lower()
 
-    if hearing.get("source") == "schedule":
+    if hearing.get("source") in ("schedule", "schedule+api"):
         return "senate"
     return ""
 
@@ -796,6 +866,10 @@ def _hearing_search_keywords(hearing):
 
 def _build_hearing_alternate_url(hearing):
     """Best-effort link to the committee event when the primary URL is wrong."""
+    stored = normalize_external_url(hearing.get("congress_url") or "")
+    if stored and "congress.gov" in stored:
+        return stored
+
     event_id = str(hearing.get("congress_event_id") or "").strip()
     if event_id:
         chamber = _infer_hearing_chamber(hearing)
@@ -947,6 +1021,11 @@ def repair_stored_hearing_urls(hearings):
     """
     changed = 0
     for h in hearings:
+        inferred = _committee_from_item_url(h.get("rss_url") or h.get("url"))
+        if inferred and h.get("committee") != inferred and _is_committee_site_url(h.get("url")):
+            h["committee"] = inferred
+            changed += 1
+
         rss = normalize_external_url(h.get("rss_url") or "")
         if not rss:
             url = normalize_external_url(h.get("url") or "")
@@ -957,6 +1036,14 @@ def repair_stored_hearing_urls(hearings):
             h["url"] = rss
             changed += 1
 
+        event_id = str(h.get("congress_event_id") or "").strip()
+        if event_id and not h.get("congress_url"):
+            chamber = _infer_hearing_chamber(h)
+            if chamber:
+                congress = _infer_congress_number(h)
+                h["congress_url"] = _congress_event_page_url(congress, chamber, event_id)
+                changed += 1
+
         old = h.get("url") or ""
         new = normalize_external_url(old)
         if h.get("rss_url"):
@@ -966,11 +1053,24 @@ def repair_stored_hearing_urls(hearings):
                 changed += 1
                 new = rss_primary
         if h.get("source") == "schedule":
-            m = _SENATE_ISVP_RE.search(h.get("notes") or "")
-            if m:
-                new = normalize_external_url(m.group(0))
-        elif h.get("source") in ("api", "rss+api"):
+            if h.get("congress_event_id") and not h.get("rss_url"):
+                chamber = _infer_hearing_chamber(h)
+                if chamber:
+                    congress = _infer_congress_number(h)
+                    new = _congress_event_page_url(
+                        congress, chamber, str(h["congress_event_id"]),
+                    )
+            else:
+                m = _SENATE_ISVP_RE.search(h.get("notes") or "")
+                if m:
+                    new = normalize_external_url(m.group(0))
+        elif h.get("source") in ("api", "rss+api", "schedule+api"):
             if h.get("rss_url"):
+                continue
+            if h.get("source") == "schedule+api" and h.get("congress_url"):
+                if new != normalize_external_url(h["congress_url"]):
+                    h["url"] = normalize_external_url(h["congress_url"])
+                    changed += 1
                 continue
             m = _LEGACY_CONGRESS_MTG_RE.match(new or old)
             if m:
@@ -1775,18 +1875,21 @@ def _resolve_tracked_committee(meeting, committee_codes):
     return None
 
 
-def _find_hearing_for_api(hearings, event_id, committee_name, title):
-    for h in hearings:
-        if str(h.get("congress_event_id") or "") == event_id:
-            if h.get("committee") == committee_name:
-                return h
-    title_lower = title.lower().strip()
+def _find_hearing_for_api(hearings, event_id, committee_name, title, meeting_date=None):
+    found = _find_hearing_by_event_id(hearings, event_id)
+    if found:
+        return found
     for h in hearings:
         if h.get("committee") != committee_name:
             continue
-        ht = (h.get("topic") or "").lower().strip()
-        if ht == title_lower or title_lower in ht or ht in title_lower:
+        if _titles_match(h.get("topic"), title):
             return h
+    if meeting_date:
+        for h in hearings:
+            if h.get("committee") != committee_name or h.get("date") != meeting_date:
+                continue
+            if h.get("source") in ("rss", "rss+api") and not h.get("congress_event_id"):
+                return h
     return None
 
 
@@ -1802,16 +1905,29 @@ def _apply_api_fields(hearing, meeting, *, committee_name, chamber, congress,
     if date_tentative:
         notes = (notes + "; " if notes else "") + "Congress.gov: meeting date not in API (using update date)"
 
+    prior_source = hearing.get("source") or ""
     hearing["committee"] = committee_name
-    hearing["topic"] = title
+    if not (prior_source in ("rss", "rss+api") and hearing.get("rss_url")):
+        hearing["topic"] = title
     hearing["date"] = meeting_date
     hearing["witnesses"] = witnesses
     hearing["status"] = _status_from_api(meeting, meeting_date)
     hearing["angle"] = detect_angle(title)
-    hearing["notes"] = notes.strip("; ")
+    if notes:
+        prior_notes = (hearing.get("notes") or "").strip()
+        if prior_source in ("rss", "rss+api", "schedule", "schedule+api") and prior_notes:
+            extra = [n for n in notes.split("; ") if n and n not in prior_notes]
+            if extra:
+                hearing["notes"] = prior_notes + "; " + "; ".join(extra)
+        else:
+            hearing["notes"] = notes.strip("; ")
     congress_url = _congress_api_meeting_url(meeting, congress, chamber, event_id)
+    hearing["congress_url"] = congress_url
+    hearing["congress_event_id"] = event_id
+    hearing["congress_chamber"] = _chamber_slug(chamber)
+
     rss_url = normalize_external_url(hearing.get("rss_url") or "")
-    if not rss_url and hearing.get("source") == "rss":
+    if not rss_url and prior_source == "rss":
         existing_url = normalize_external_url(hearing.get("url") or "")
         if _is_committee_site_url(existing_url):
             rss_url = existing_url
@@ -1819,11 +1935,12 @@ def _apply_api_fields(hearing, meeting, *, committee_name, chamber, congress,
         hearing["rss_url"] = rss_url
         hearing["url"] = rss_url
         hearing["source"] = "rss+api"
+    elif prior_source in ("schedule", "schedule+api"):
+        hearing["url"] = congress_url or normalize_external_url(hearing.get("url") or "")
+        hearing["source"] = "schedule+api"
     else:
         hearing["url"] = congress_url
         hearing["source"] = "api"
-    hearing["congress_event_id"] = event_id
-    hearing["congress_chamber"] = _chamber_slug(chamber)
 
 
 def _fetch_api_meeting_detail(api_base, congress, chamber, event_id, detail_url,
@@ -1843,7 +1960,7 @@ def _fetch_api_meeting_detail(api_base, congress, chamber, event_id, detail_url,
 
 def _hearing_needs_api_reconcile(hearing):
     """Only re-fetch when the stored link is missing or uses a broken legacy path."""
-    if hearing.get("source") not in ("api", "rss+api"):
+    if hearing.get("source") not in ("api", "rss+api", "schedule+api"):
         return False
     if hearing.get("rss_url"):
         return False
@@ -1882,12 +1999,6 @@ def pull_congress_api(hearings, api_key, silent=False, persist=True,
     cutoff = date.today().toordinal() - RSS_CUTOFF_DAYS
     codes = cfg["committee_codes"]
     cache = meeting_cache if meeting_cache is not None else {}
-    # Senate schedule XML already fills tracked Senate meetings; skip duplicate API work.
-    schedule_event_ids = {
-        str(h.get("congress_event_id"))
-        for h in hearings
-        if h.get("source") == "schedule" and h.get("congress_event_id")
-    }
 
     new_items = []
     updated_count = 0
@@ -1913,8 +2024,6 @@ def pull_congress_api(hearings, api_key, silent=False, persist=True,
             if not event_id or event_id in seen_list_ids:
                 continue
             seen_list_ids.add(event_id)
-            if chamber == "senate" and event_id in schedule_event_ids:
-                continue
 
             try:
                 meeting = _fetch_api_meeting_detail(
@@ -1942,7 +2051,7 @@ def pull_congress_api(hearings, api_key, silent=False, persist=True,
                 )
 
             existing = _find_hearing_for_api(
-                hearings, event_id, resolved_committee, title
+                hearings, event_id, resolved_committee, title, meeting_date,
             )
             if existing:
                 _apply_api_fields(
@@ -2028,6 +2137,9 @@ def reconcile_api_hearings(hearings, api_key, cfg, silent=False,
             changed += 1
         if title and title != (h.get("topic") or ""):
             h["topic"] = title
+            changed += 1
+        if new_url:
+            h["congress_url"] = new_url
             changed += 1
         if new_url and not h.get("rss_url") and new_url != (h.get("url") or ""):
             h["url"] = new_url

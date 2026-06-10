@@ -51,6 +51,8 @@
           <span class="text-xs px-2.5 py-1 rounded-full font-medium bg-indigo-100 text-indigo-600">Congress.gov API</span>
         {% elif h.get('source') == 'rss+api' %}
           <span class="text-xs px-2.5 py-1 rounded-full font-medium bg-violet-100 text-violet-700">RSS + API</span>
+        {% elif h.get('source') == 'schedule+api' %}
+          <span class="text-xs px-2.5 py-1 rounded-full font-medium bg-violet-100 text-violet-700">Schedule + API</span>
         {% elif h.get('source') == 'rss' %}
           <span class="text-xs px-2.5 py-1 rounded-full font-medium bg-slate-100 text-slate-500">RSS</span>
         {% else %}
