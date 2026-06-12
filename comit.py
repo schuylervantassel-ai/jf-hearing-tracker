@@ -1128,7 +1128,7 @@ def repair_stored_hearing_urls(hearings):
     Fix URLs already on disk: schedule rows → Senate ISVP when in notes,
     and upgrade http:// links to https://.
     """
-    changed = 0
+    changed = _sync_senate_schedule_dates(hearings)
     for h in hearings:
         inferred = _committee_from_item_url(h.get("rss_url") or h.get("url"))
         if inferred and h.get("committee") != inferred and _is_committee_site_url(h.get("url")):
@@ -1280,6 +1280,35 @@ def _fetch_senate_schedule_xml():
         return resp.read()
 
 
+def _sync_senate_schedule_dates(hearings):
+    """Correct Senate hearing dates from official schedule XML (beats API updateDate)."""
+    try:
+        root = ET.fromstring(_fetch_senate_schedule_xml())
+    except Exception:
+        return 0
+    by_id = {}
+    for mtg in root.findall("meeting"):
+        eid = (mtg.findtext("identifier") or "").strip()
+        md = (mtg.findtext("date_iso_8601") or "")[:10]
+        if eid and md and md[0].isdigit():
+            by_id[eid] = md
+    if not by_id:
+        return 0
+    today = date.today().isoformat()
+    changed = 0
+    for h in hearings:
+        eid = str(h.get("congress_event_id") or "").strip()
+        if not eid or eid not in by_id:
+            continue
+        sched_date = by_id[eid]
+        if h.get("date") == sched_date:
+            continue
+        h["date"] = sched_date
+        h["status"] = "Upcoming" if sched_date >= today else "Completed"
+        changed += 1
+    return changed
+
+
 def pull_senate_schedule(hearings, silent=False, persist=True):
     """
     Import upcoming Senate committee meetings from the official schedule XML
@@ -1336,7 +1365,13 @@ def pull_senate_schedule(hearings, silent=False, persist=True):
             hearing["url"] = _senate_schedule_meeting_url(video, congress, event_id)
             hearing["congress_event_id"] = event_id
             hearing["congress_chamber"] = "senate"
-            hearing["source"] = "schedule"
+            prior = hearing.get("source") or ""
+            if prior in ("api", "schedule+api"):
+                hearing["source"] = "schedule+api"
+            elif prior == "rss+api":
+                hearing["source"] = "rss+api"
+            else:
+                hearing["source"] = "schedule"
             hearing["angle"] = detect_angle(title)
             updated += 1
         else:
@@ -1928,19 +1963,33 @@ def _chamber_for_system_code(system_code):
     return None
 
 
+def _api_raw_date_to_iso(raw):
+    """Extract YYYY-MM-DD from Congress.gov date strings (ISO or 'YYYY-MM-DD HH…')."""
+    if not raw:
+        return ""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", str(raw))
+    return m.group(1) if m else ""
+
+
 def _parse_meeting_date_from_api(meeting):
     """Return (YYYY-MM-DD, is_tentative). API often omits dates on Senate records."""
-    for d in meeting.get("dates") or []:
-        raw = (d.get("date") or "")[:10]
-        if raw and raw[0].isdigit():
+    top = _api_raw_date_to_iso(meeting.get("date"))
+    if top:
+        return top, False
+    dates = meeting.get("dates") or []
+    if isinstance(dates, dict):
+        dates = [dates]
+    for d in dates:
+        raw = _api_raw_date_to_iso(d.get("date") if isinstance(d, dict) else d)
+        if raw:
             return raw, False
     for cont in meeting.get("meetingContinuations") or []:
-        raw = (cont.get("date") or "")[:10]
-        if raw and raw[0].isdigit():
+        raw = _api_raw_date_to_iso(cont.get("date"))
+        if raw:
             return raw, False
-    upd = meeting.get("updateDate") or ""
+    upd = _api_raw_date_to_iso(meeting.get("updateDate"))
     if upd:
-        return str(upd)[:10], True
+        return upd, True
     return date.today().isoformat(), True
 
 
@@ -2017,9 +2066,15 @@ def _apply_api_fields(hearing, meeting, *, committee_name, chamber, congress,
     hearing["committee"] = committee_name
     if not (prior_source in ("rss", "rss+api") and hearing.get("rss_url")):
         hearing["topic"] = title
-    hearing["date"] = meeting_date
+    existing_date = (hearing.get("date") or "").strip()
+    # Senate schedule / RSS dates beat API updateDate fallbacks on merge.
+    if date_tentative and existing_date:
+        effective_date = existing_date
+    else:
+        hearing["date"] = meeting_date
+        effective_date = meeting_date
     hearing["witnesses"] = witnesses
-    hearing["status"] = _status_from_api(meeting, meeting_date)
+    hearing["status"] = _status_from_api(meeting, effective_date)
     hearing["angle"] = detect_angle(title)
     if notes:
         prior_notes = (hearing.get("notes") or "").strip()
@@ -2256,12 +2311,20 @@ def reconcile_api_hearings(hearings, api_key, cfg, silent=False,
         if title and title != (h.get("topic") or ""):
             h["topic"] = title
             changed += 1
+        meeting_date, date_tentative = _parse_meeting_date_from_api(meeting)
+        if not (date_tentative and h.get("date")):
+            h["date"] = meeting_date
+            h["status"] = _status_from_api(meeting, meeting_date)
+            changed += 1
         if new_url:
             h["congress_url"] = new_url
             changed += 1
-        if new_url and not h.get("rss_url") and new_url != (h.get("url") or ""):
-            h["url"] = new_url
-            changed += 1
+        if not h.get("rss_url"):
+            committee_page = _committee_hearings_page_url(h.get("committee"))
+            preferred = committee_page or new_url
+            if preferred and preferred != (h.get("url") or ""):
+                h["url"] = preferred
+                changed += 1
         if not resolved:
             note = "Congress.gov: meeting is not for a tracked committee"
             if note not in (h.get("notes") or ""):
